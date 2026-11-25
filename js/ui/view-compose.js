@@ -2,6 +2,8 @@
 // VIEW 2: COMPOSE — UNIFIED VISUAL CANVAS STUDIO (js/ui/view-compose.js)
 // Clean visual composer for SuperSource 1-2, M/E 1-4 USKs & DSK 1-4:
 //   - Big unobstructed 16:9 interactive drag/resize/snap stage
+//   - Live Stage Feed (PGM / PVW) + non-destructive "Preview Selected" so
+//     off-air USKs/DSKs/Boxes give instant visual feedback without going live
 //   - Visual mini-wireframe SuperSource Layout Preset gallery + "+ Save Layout"
 //   - Calm 3-tab right inspector (Source & Key | Transform & Fly | Crop & Style)
 // =========================================================================
@@ -10,6 +12,8 @@ const ViewCompose = (() => {
     let selectedWsId = null;     // workspace.id (4/5 = SS1/2, 0..3 = ME1..4)
     let selectedTarget = { kind: "box", index: 0 }; // "box" | "art" | "bg" | "usk" | "dsk"
     let inspectorTab = "source"; // "source" | "transform" | "style"
+    let stageBusMode = "program"; // "program" | "preview"
+    let previewSelected = true;   // Non-destructively preview the currently edited USK/DSK/Box even when off-air
     let showGuides = true;
     let showSafeArea = true;
     let snapEnabled = true;
@@ -35,6 +39,42 @@ const ViewCompose = (() => {
             selectedTarget = ws.type === "superSource" ? { kind: "box", index: 0 } : { kind: "usk", index: 0 };
         }
         return ws;
+    }
+
+    function isUskVisibleOnStage(ws, idx) {
+        const u = ws?.data?.usk?.[idx];
+        if (!u) return false;
+        if (stageBusMode === "preview") {
+            const ntFlag = !!(ws.data?.nextTransition?.usk?.[idx]);
+            return u.enabled !== ntFlag;
+        }
+        return !!u.enabled;
+    }
+
+    function isDskVisibleOnStage(idx) {
+        const dsk = getDSK(idx);
+        if (!dsk) return false;
+        if (stageBusMode === "preview") {
+            return dsk.enabled !== !!dsk.tie;
+        }
+        return !!dsk.enabled;
+    }
+
+    function isSelectedInLocalPreview(ws) {
+        if (!previewSelected || !ws) return false;
+        if (ws.type === "superSource" && selectedTarget.kind === "box") {
+            const b = ws.data.boxes?.[selectedTarget.index];
+            return !!(b && !b.enabled);
+        }
+        if (ws.type === "me" && selectedTarget.kind === "usk") {
+            const u = ws.data.usk?.[selectedTarget.index];
+            return !!(u && !isUskVisibleOnStage(ws, selectedTarget.index));
+        }
+        if (ws.type === "me" && ws.resourceId === 0 && selectedTarget.kind === "dsk") {
+            const d = getDSK(selectedTarget.index);
+            return !!(d && !isDskVisibleOnStage(selectedTarget.index));
+        }
+        return false;
     }
 
     function buildSourceOptions(destType, selectedId, ws) {
@@ -73,8 +113,21 @@ const ViewCompose = (() => {
             });
         }
 
-        // Live-update numeric slider readout labels in place
+        // Live-update mask guide overlay if present
         const layer = getCurrentLayerObj(ws);
+        const maskEl = frame.querySelector("#composeMaskGuide");
+        if (maskEl && layer && layer.maskEnabled) {
+            const left = (layer.maskLeft || 0) / 180;
+            const right = (layer.maskRight || 0) / 180;
+            const top = (layer.maskTop || 0) / 180;
+            const bottom = (layer.maskBottom || 0) / 180;
+            maskEl.style.left = `${left}%`;
+            maskEl.style.top = `${top}%`;
+            maskEl.style.width = `${Math.max(0, 100 - left - right)}%`;
+            maskEl.style.height = `${Math.max(0, 100 - top - bottom)}%`;
+        }
+
+        // Live-update numeric slider readout labels in place
         const setRo = (id, text) => {
             const sp = document.querySelector(`[data-ro="${id}"]`);
             if (sp) sp.textContent = text;
@@ -94,6 +147,11 @@ const ViewCompose = (() => {
                 setRo("borderW", `${cropHost.borderWidth || 2}px`);
             }
             ["maskLeft", "maskRight", "maskTop", "maskBottom"].forEach(k => setRo(k, String(layer[k] || 0)));
+            if (selectedTarget.kind === "dsk") {
+                setRo("dskClip", `${ks.linear?.clip ?? 50}%`);
+                setRo("dskGain", `${ks.linear?.gain ?? 50}%`);
+                ["maskLeft", "maskRight", "maskTop", "maskBottom"].forEach(k => setRo(`dsk_${k}`, String(layer[k] || 0)));
+            }
         }
         if (ws.type === "superSource") {
             setRo("artClip", `${ws.data.artClip ?? 50}%`);
@@ -106,10 +164,19 @@ const ViewCompose = (() => {
         const canvas = document.getElementById("composeCanvas");
         if (!canvas || !ws || typeof CanvasRenderer === "undefined") return;
         const ctx = canvas.getContext("2d");
+
         if (ws.type === "superSource") {
-            CanvasRenderer.renderSuperSource(ctx, ws);
+            const forceShowBoxIndex = (previewSelected && selectedTarget.kind === "box") ? selectedTarget.index : -1;
+            CanvasRenderer.renderSuperSource(ctx, ws, { forceShowBoxIndex });
         } else {
-            CanvasRenderer.renderME(ctx, ws, { mode: "program", includeDSK: ws.resourceId === 0 });
+            const forceShowUskIndex = (previewSelected && selectedTarget.kind === "usk") ? selectedTarget.index : -1;
+            const forceShowDskIndex = (previewSelected && ws.resourceId === 0 && selectedTarget.kind === "dsk") ? selectedTarget.index : -1;
+            CanvasRenderer.renderME(ctx, ws, {
+                mode: stageBusMode,
+                includeDSK: ws.resourceId === 0,
+                forceShowUskIndex,
+                forceShowDskIndex
+            });
         }
     }
 
@@ -126,6 +193,89 @@ const ViewCompose = (() => {
         return null;
     }
 
+    function renderStageStatusHtml(ws) {
+        const esc = AppUI.esc;
+        const localPrev = isSelectedInLocalPreview(ws);
+
+        if (ws.type === "superSource") {
+            if (selectedTarget.kind === "art") {
+                return `
+                    <div class="compose-stage-status">
+                        <div class="field-row" style="gap:7px;">
+                            <span class="badge cyan">${esc(ws.name)} · ART</span>
+                            <span>${esc(ws.data.artPlace || "Background")} · ${esc(getSourceDisplayName(ws.data.artSource || ""))}</span>
+                        </div>
+                        <span class="muted">Select Boxes 1–4 to drag & resize</span>
+                    </div>
+                `;
+            }
+            const b = ws.data.boxes?.[selectedTarget.index];
+            return `
+                <div class="compose-stage-status ${localPrev ? "is-preview-override" : ""}">
+                    <div class="field-row" style="gap:7px;">
+                        <span class="badge ${b?.enabled ? "green" : "amber"}">Box ${selectedTarget.index + 1} · ${b?.enabled ? "ON" : (localPrev ? "OFF (Edit Preview)" : "OFF")}</span>
+                        <strong>${esc(getSourceDisplayName(b?.source || ""))}</strong>
+                        <span class="mono muted">X:${Number(b?.x || 0).toFixed(1)} Y:${Number(b?.y || 0).toFixed(1)} · ${Math.round((b?.size ?? 0.5) * 100)}%</span>
+                    </div>
+                    <span class="muted">${localPrev ? "Local preview only — enable Box to show live" : "Drag box or corner handle to transform"}</span>
+                </div>
+            `;
+        }
+
+        const busTag = stageBusMode === "preview" ? "PVW" : "PGM";
+        if (selectedTarget.kind === "bg") {
+            const bgSrc = stageBusMode === "preview" ? ws.data.previewSource : ws.data.source;
+            return `
+                <div class="compose-stage-status">
+                    <div class="field-row" style="gap:7px;">
+                        <span class="badge ${stageBusMode === "preview" ? "green" : "red"}">${esc(ws.name)} ${busTag} · BG</span>
+                        <strong>${esc(getSourceDisplayName(bgSrc || ""))}</strong>
+                    </div>
+                    <span class="muted">Pick USK 1–4 or DSK 1–4 on the right to compose keyers</span>
+                </div>
+            `;
+        }
+
+        if (selectedTarget.kind === "dsk") {
+            const dsk = getDSK(selectedTarget.index);
+            const liveVis = isDskVisibleOnStage(selectedTarget.index);
+            const statusLbl = dsk?.enabled ? "ON AIR" : (dsk?.tie ? "TIED (PVW)" : (localPrev ? "OFF AIR · Edit Preview" : "OFF AIR"));
+            return `
+                <div class="compose-stage-status ${localPrev ? "is-preview-override" : ""}">
+                    <div class="field-row" style="gap:7px;">
+                        <span class="badge ${dsk?.enabled ? "red" : (liveVis ? "green" : "amber")}">DSK ${selectedTarget.index + 1} · ${statusLbl}</span>
+                        <strong>Fill: ${esc(getSourceDisplayName(dsk?.source || ""))}</strong>
+                        ${dsk?.keySource ? `<span class="muted">Key: ${esc(getSourceShortName(dsk.keySource))}</span>` : ""}
+                    </div>
+                    <span class="muted">${localPrev ? "Previewing locally — live Program is untouched" : `${esc(ws.name)} ${busTag}`}</span>
+                </div>
+            `;
+        }
+
+        const u = ws.data.usk?.[selectedTarget.index];
+        const ntStaged = !!(ws.data?.nextTransition?.usk?.[selectedTarget.index]);
+        const hasDve = u && (u.keyType === "dve" || u.flyingKey);
+        const stateText = u?.enabled
+            ? "ON AIR"
+            : (ntStaged && stageBusMode === "preview")
+                ? "STAGED (PVW)"
+                : (localPrev ? "OFF AIR · Edit Preview" : "OFF AIR");
+        const stateClass = u?.enabled ? "red" : (ntStaged ? "green" : "amber");
+        const posSummary = hasDve ? `X:${Number(u.x || 0).toFixed(1)} Y:${Number(u.y || 0).toFixed(1)} · ${Math.round((u.size ?? 1) * 100)}%` : "Full-Frame Keyer";
+
+        return `
+            <div class="compose-stage-status ${localPrev ? "is-preview-override" : ""}">
+                <div class="field-row" style="gap:7px; flex-wrap:wrap;">
+                    <span class="badge ${stateClass}">USK ${selectedTarget.index + 1} · ${stateText}</span>
+                    <span class="badge cyan">${esc((u?.keyType || "luma").toUpperCase())}${u?.flyingKey && u?.keyType !== "dve" ? " + FLY" : ""}</span>
+                    <strong>${esc(getSourceDisplayName(u?.source || ""))}</strong>
+                    <span class="mono muted">${posSummary}</span>
+                </div>
+                <span class="muted">${localPrev ? "Previewing off-air USK locally — live output is safe" : (hasDve ? "Drag box or corner handle" : "Switch to DVE / Flying Key to drag")}</span>
+            </div>
+        `;
+    }
+
     function renderStageBoxesHtml(ws) {
         if (!showGuides) return "";
         const esc = AppUI.esc;
@@ -133,13 +283,14 @@ const ViewCompose = (() => {
 
         if (ws.type === "superSource") {
             (ws.data.boxes || []).forEach((b, idx) => {
-                if (!b.enabled) return;
-                const rect = atemToCanvas(b);
                 const isSel = selectedTarget.kind === "box" && selectedTarget.index === idx;
+                const showThis = b.enabled || (isSel && previewSelected);
+                if (!showThis) return;
+                const rect = atemToCanvas(b);
                 items.push(`
-                    <div class="stage-box ${isSel ? "selected" : ""}" data-drag-kind="box" data-drag-idx="${idx}"
+                    <div class="stage-box ${isSel ? "selected" : ""} ${!b.enabled ? "off-air-preview" : ""}" data-drag-kind="box" data-drag-idx="${idx}"
                          style="left:${rect.left}%; top:${rect.top}%; width:${rect.width}%; height:${rect.height}%;">
-                        <span class="stage-box-tag">B${idx + 1} · ${esc(getSourceShortName(b.source))}</span>
+                        <span class="stage-box-tag">B${idx + 1} · ${esc(getSourceShortName(b.source))}${!b.enabled ? " (PREVIEW)" : ""}</span>
                         ${isSel ? `<div class="stage-resize-handle" data-resize-kind="box" data-resize-idx="${idx}"></div>` : ""}
                     </div>
                 `);
@@ -147,18 +298,35 @@ const ViewCompose = (() => {
         } else {
             const maxUsks = getUpstreamKeyersPerME(getProfile());
             (ws.data.usk || []).slice(0, maxUsks).forEach((u, idx) => {
-                if (!u.enabled) return;
+                const isSel = selectedTarget.kind === "usk" && selectedTarget.index === idx;
+                const visibleLive = isUskVisibleOnStage(ws, idx);
+                const showThis = visibleLive || (isSel && previewSelected);
+                if (!showThis) return;
                 const hasDve = u.keyType === "dve" || u.flyingKey;
                 const rect = hasDve ? atemToCanvas(u) : { left: 0, top: 0, width: 100, height: 100 };
-                const isSel = selectedTarget.kind === "usk" && selectedTarget.index === idx;
+                const offAirTag = !visibleLive ? " · OFF AIR PREVIEW" : "";
                 items.push(`
-                    <div class="stage-box ${isSel ? "selected" : ""}" data-drag-kind="usk" data-drag-idx="${idx}"
+                    <div class="stage-box ${isSel ? "selected" : ""} ${!visibleLive ? "off-air-preview" : ""} ${!hasDve ? "fullscreen-key" : ""}" data-drag-kind="usk" data-drag-idx="${idx}"
                          style="left:${rect.left}%; top:${rect.top}%; width:${rect.width}%; height:${rect.height}%; ${hasDve ? "" : "cursor:pointer;"}">
-                        <span class="stage-box-tag">USK ${idx + 1} · ${esc(getSourceShortName(u.source))}</span>
+                        <span class="stage-box-tag">USK ${idx + 1} (${esc((u.keyType || "luma").toUpperCase())}) · ${esc(getSourceShortName(u.source))}${offAirTag}</span>
                         ${isSel && hasDve ? `<div class="stage-resize-handle" data-resize-kind="usk" data-resize-idx="${idx}"></div>` : ""}
                     </div>
                 `);
             });
+
+            // Show interactive Mask inset rectangle when editing a masked USK or DSK
+            const activeLayer = getCurrentLayerObj(ws);
+            if (activeLayer && activeLayer.maskEnabled && (selectedTarget.kind === "usk" || selectedTarget.kind === "dsk")) {
+                const left = (activeLayer.maskLeft || 0) / 180;
+                const right = (activeLayer.maskRight || 0) / 180;
+                const top = (activeLayer.maskTop || 0) / 180;
+                const bottom = (activeLayer.maskBottom || 0) / 180;
+                items.push(`
+                    <div id="composeMaskGuide" class="stage-mask-guide"
+                         style="left:${left}%; top:${top}%; width:${Math.max(0, 100 - left - right)}%; height:${Math.max(0, 100 - top - bottom)}%;">
+                    </div>
+                `);
+            }
         }
         return items.join("");
     }
@@ -230,7 +398,7 @@ const ViewCompose = (() => {
                         <label class="check-row"><input type="checkbox" id="cmpDskMaskLink" ${dsk.maskLinked ? "checked" : ""}> Link Opposite Edges</label>
                         ${[["maskLeft", "Left"], ["maskRight", "Right"], ["maskTop", "Top"], ["maskBottom", "Bottom"]].map(([k, lbl]) => `
                             <div class="field">
-                                <label>Mask ${lbl} <span class="mono">${dsk[k] || 0}</span></label>
+                                <label>Mask ${lbl} <span class="mono" data-ro="dsk_${k}">${dsk[k] || 0}</span></label>
                                 <input type="range" data-dsk-mask="${k}" min="0" max="18000" value="${dsk[k] || 0}">
                             </div>
                         `).join("")}
@@ -259,11 +427,11 @@ const ViewCompose = (() => {
                 <label class="check-row"><input type="checkbox" id="cmpDskPre" ${lin.premultiplied ? "checked" : ""}> Pre-Multiplied</label>
                 <label class="check-row"><input type="checkbox" id="cmpDskInv" ${lin.invert ? "checked" : ""}> Invert Key</label>
                 <div class="field">
-                    <label>Clip <span class="mono">${lin.clip ?? 50}%</span></label>
+                    <label>Clip <span class="mono" data-ro="dskClip">${lin.clip ?? 50}%</span></label>
                     <input type="range" id="cmpDskClip" min="0" max="100" value="${lin.clip ?? 50}">
                 </div>
                 <div class="field">
-                    <label>Gain <span class="mono">${lin.gain ?? 50}%</span></label>
+                    <label>Gain <span class="mono" data-ro="dskGain">${lin.gain ?? 50}%</span></label>
                     <input type="range" id="cmpDskGain" min="0" max="100" value="${lin.gain ?? 50}">
                 </div>
             `;
@@ -275,19 +443,39 @@ const ViewCompose = (() => {
         const isSS = ws.type === "superSource";
         const hasDve = isSS || layer.keyType === "dve" || layer.flyingKey;
         const dveObj = !isSS && layer.dveId !== null ? state.resources.dves.find(d => d.id === layer.dveId) : null;
+        const ntStaged = !isSS && !!(ws.data?.nextTransition?.usk?.[selectedTarget.index]);
+        const bgSourceId = !isSS ? (stageBusMode === "preview" ? ws.data.previewSource : ws.data.source) : "";
+        const sameAsBg = !isSS && layer.source && layer.source === bgSourceId;
 
         if (inspectorTab === "source") {
             const ks = layer.keySettings || {};
             return `
-                <label class="check-row" style="padding:8px 10px; border-radius:6px; background:var(--bg-elevated); border:1px solid var(--border);">
-                    <input type="checkbox" id="cmpLayerEnabled" ${layer.enabled ? "checked" : ""}>
-                    <strong>${isSS ? `Box ${selectedTarget.index + 1} Enabled` : `USK ${selectedTarget.index + 1} On Air`}</strong>
-                </label>
+                ${isSS ? `
+                    <label class="check-row" style="padding:8px 10px; border-radius:6px; background:var(--bg-elevated); border:1px solid var(--border);">
+                        <input type="checkbox" id="cmpLayerEnabled" ${layer.enabled ? "checked" : ""}>
+                        <strong>Box ${selectedTarget.index + 1} Enabled</strong>
+                    </label>
+                ` : `
+                    <div class="field-row" style="gap:6px;">
+                        <button class="btn ${layer.enabled ? "btn-pgm solid" : ""}" id="cmpUskOnAirBtn" style="flex:1;">
+                            USK ${selectedTarget.index + 1} ${layer.enabled ? "ON AIR" : "Off Air"}
+                        </button>
+                        <button class="btn ${ntStaged ? "btn-amber solid" : ""}" id="cmpUskStageBtn" title="Include USK ${selectedTarget.index + 1} in Next Transition (shows on PVW)">
+                            Next Trans
+                        </button>
+                    </div>
+                `}
 
                 <div class="field">
                     <label for="cmpLayerSource">Fill Source</label>
                     <select id="cmpLayerSource">${buildSourceOptions(isSS ? "superSource" : "me", layer.source || "", ws)}</select>
                 </div>
+
+                ${sameAsBg ? `
+                    <div style="padding:7px 9px; border-radius:6px; background:var(--amber-bg); border:1px solid var(--amber-border); color:var(--amber-text); font-size:11px; line-height:1.35;">
+                        Fill Source matches the ${stageBusMode === "preview" ? "PVW" : "PGM"} background (${esc(getSourceShortName(layer.source))}). Pick a different Fill Source (e.g. Media Player 1 or another Camera) to see the key clearly.
+                    </div>
+                ` : ""}
 
                 ${!isSS ? `
                     <div class="field">
@@ -305,8 +493,8 @@ const ViewCompose = (() => {
                         </label>
                     ` : ""}
                     ${layer.keyType === "luma" ? `
-                        <div class="field"><label>Clip <span class="mono">${ks.luma?.clip ?? 50}%</span></label><input type="range" id="cmpLumaClip" min="0" max="100" value="${ks.luma?.clip ?? 50}"></div>
-                        <div class="field"><label>Gain <span class="mono">${ks.luma?.gain ?? 50}%</span></label><input type="range" id="cmpLumaGain" min="0" max="100" value="${ks.luma?.gain ?? 50}"></div>
+                        <div class="field"><label>Clip <span class="mono" data-ro="lumaClip">${ks.luma?.clip ?? 50}%</span></label><input type="range" id="cmpLumaClip" min="0" max="100" value="${ks.luma?.clip ?? 50}"></div>
+                        <div class="field"><label>Gain <span class="mono" data-ro="lumaGain">${ks.luma?.gain ?? 50}%</span></label><input type="range" id="cmpLumaGain" min="0" max="100" value="${ks.luma?.gain ?? 50}"></div>
                         <label class="check-row"><input type="checkbox" id="cmpLumaInv" ${ks.luma?.invert ? "checked" : ""}> Invert Luma</label>
                     ` : ""}
                     ${layer.keyType === "linear" ? `
@@ -315,16 +503,16 @@ const ViewCompose = (() => {
                             <select id="cmpKeySrc">${buildSourceOptions("me", ks.linear?.keySource || "", ws)}</select>
                         </div>
                         <label class="check-row"><input type="checkbox" id="cmpLinPre" ${ks.linear?.premultiplied ? "checked" : ""}> Pre-Multiplied</label>
-                        <div class="field"><label>Clip <span class="mono">${ks.linear?.clip ?? 50}%</span></label><input type="range" id="cmpLinClip" min="0" max="100" value="${ks.linear?.clip ?? 50}"></div>
-                        <div class="field"><label>Gain <span class="mono">${ks.linear?.gain ?? 50}%</span></label><input type="range" id="cmpLinGain" min="0" max="100" value="${ks.linear?.gain ?? 50}"></div>
+                        <div class="field"><label>Clip <span class="mono" data-ro="linClip">${ks.linear?.clip ?? 50}%</span></label><input type="range" id="cmpLinClip" min="0" max="100" value="${ks.linear?.clip ?? 50}"></div>
+                        <div class="field"><label>Gain <span class="mono" data-ro="linGain">${ks.linear?.gain ?? 50}%</span></label><input type="range" id="cmpLinGain" min="0" max="100" value="${ks.linear?.gain ?? 50}"></div>
                     ` : ""}
                     ${layer.keyType === "chroma" ? `
                         <div class="field-row" style="justify-content:space-between;">
                             <span style="font-size:12px;">Key Colour</span>
                             <input type="color" id="cmpChromaCol" value="${esc(ks.chroma?.sampleColor || "#00ff00")}">
                         </div>
-                        <div class="field"><label>Spill Suppression <span class="mono">${ks.chroma?.spill ?? 50}%</span></label><input type="range" id="cmpChromaSpill" min="0" max="100" value="${ks.chroma?.spill ?? 50}"></div>
-                        <div class="field"><label>Chroma Correction <span class="mono">${ks.chroma?.correction ?? 50}%</span></label><input type="range" id="cmpChromaCorr" min="0" max="100" value="${ks.chroma?.correction ?? 50}"></div>
+                        <div class="field"><label>Spill Suppression <span class="mono" data-ro="chromaSpill">${ks.chroma?.spill ?? 50}%</span></label><input type="range" id="cmpChromaSpill" min="0" max="100" value="${ks.chroma?.spill ?? 50}"></div>
+                        <div class="field"><label>Chroma Correction <span class="mono" data-ro="chromaCorr">${ks.chroma?.correction ?? 50}%</span></label><input type="range" id="cmpChromaCorr" min="0" max="100" value="${ks.chroma?.correction ?? 50}"></div>
                     ` : ""}
                     ${layer.keyType === "pattern" ? `
                         <div class="field">
@@ -333,8 +521,8 @@ const ViewCompose = (() => {
                                 ${["box", "circle", "diamond", "horizontal", "vertical"].map(pt => `<option value="${pt}" ${ks.pattern?.pattern === pt ? "selected" : ""}>${pt}</option>`).join("")}
                             </select>
                         </div>
-                        <div class="field"><label>Size <span class="mono">${ks.pattern?.size ?? 50}%</span></label><input type="range" id="cmpPatSize" min="0" max="100" value="${ks.pattern?.size ?? 50}"></div>
-                        <div class="field"><label>Softness <span class="mono">${ks.pattern?.softness ?? 0}%</span></label><input type="range" id="cmpPatSoft" min="0" max="100" value="${ks.pattern?.softness ?? 0}"></div>
+                        <div class="field"><label>Size <span class="mono" data-ro="patSize">${ks.pattern?.size ?? 50}%</span></label><input type="range" id="cmpPatSize" min="0" max="100" value="${ks.pattern?.size ?? 50}"></div>
+                        <div class="field"><label>Softness <span class="mono" data-ro="patSoft">${ks.pattern?.softness ?? 0}%</span></label><input type="range" id="cmpPatSoft" min="0" max="100" value="${ks.pattern?.softness ?? 0}"></div>
                     ` : ""}
                 ` : ""}
             `;
@@ -346,6 +534,10 @@ const ViewCompose = (() => {
                     <p class="muted" style="font-size:12px;">
                         Switch Key Type to <strong>DVE</strong> or enable <strong>Flying Key</strong> in Source & Key to unlock X/Y/Scale transforms and Keyframes A/B.
                     </p>
+                    <div class="field-row" style="gap:6px;">
+                        <button class="btn btn-sm btn-accent-soft" id="cmpQuickEnableDve" style="flex:1;">Switch to DVE</button>
+                        <button class="btn btn-sm" id="cmpQuickEnableFly" style="flex:1;">Enable Flying Key</button>
+                    </div>
                 `;
             }
             return `
@@ -424,7 +616,7 @@ const ViewCompose = (() => {
                         <label class="check-row"><input type="checkbox" id="cmpMaskLink" ${layer.maskLinked ? "checked" : ""}> Link Opposite Edges</label>
                         ${[["maskLeft", "Left"], ["maskRight", "Right"], ["maskTop", "Top"], ["maskBottom", "Bottom"]].map(([k, lbl]) => `
                             <div class="field">
-                                <label>Mask ${lbl} <span class="mono">${layer[k] || 0}</span></label>
+                                <label>Mask ${lbl} <span class="mono" data-ro="${k}">${layer[k] || 0}</span></label>
                                 <input type="range" data-mask-edge="${k}" min="0" max="18000" value="${layer[k] || 0}">
                             </div>
                         `).join("")}
@@ -493,6 +685,7 @@ const ViewCompose = (() => {
                     targetBox.style.width = `${liveRect.width}%`;
                     targetBox.style.height = `${liveRect.height}%`;
                 }
+                syncLiveStageOverlays();
                 renderCanvas();
             };
 
@@ -529,14 +722,18 @@ const ViewCompose = (() => {
             `
             : `
                 <button class="layer-pill ${selectedTarget.kind === "bg" ? "active" : ""}" data-lkind="bg" data-lidx="0">BG</button>
-                ${(ws.data.usk || []).slice(0, maxUsks).map((u, i) => `
-                    <button class="layer-pill ${selectedTarget.kind === "usk" && selectedTarget.index === i ? "active" : ""}" data-lkind="usk" data-lidx="${i}">
-                        <span class="dot ${u.enabled ? "air" : ""}"></span>USK ${i + 1}
-                    </button>
-                `).join("")}
+                ${(ws.data.usk || []).slice(0, maxUsks).map((u, i) => {
+                    const ntFlag = !!(ws.data?.nextTransition?.usk?.[i]);
+                    const dotClass = u.enabled ? "air" : (ntFlag ? "on" : "");
+                    return `
+                        <button class="layer-pill ${selectedTarget.kind === "usk" && selectedTarget.index === i ? "active" : ""}" data-lkind="usk" data-lidx="${i}">
+                            <span class="dot ${dotClass}"></span>USK ${i + 1}
+                        </button>
+                    `;
+                }).join("")}
                 ${ws.resourceId === 0 ? dsks.map(d => `
                     <button class="layer-pill ${selectedTarget.kind === "dsk" && selectedTarget.index === d.id ? "active" : ""}" data-lkind="dsk" data-lidx="${d.id}">
-                        <span class="dot ${d.enabled ? "air" : ""}"></span>DSK ${d.id + 1}
+                        <span class="dot ${d.enabled ? "air" : (d.tie ? "on" : "")}"></span>DSK ${d.id + 1}
                     </button>
                 `).join("") : ""}
             `;
@@ -546,12 +743,23 @@ const ViewCompose = (() => {
         container.innerHTML = `
             <div class="compose-view">
                 <div class="subbar">
-                    <div class="seg">
-                        ${wsList.map(w => `
-                            <button class="seg-item ${w.id === ws.id ? "active" : ""}" data-cws="${w.id}">${esc(w.name)}</button>
-                        `).join("")}
+                    <div class="field-row" style="gap:10px;">
+                        <div class="seg">
+                            ${wsList.map(w => `
+                                <button class="seg-item ${w.id === ws.id ? "active" : ""}" data-cws="${w.id}">${esc(w.name)}</button>
+                            `).join("")}
+                        </div>
+                        ${ws.type === "me" ? `
+                            <div class="seg" title="Switch stage background between Program (PGM) and Preview (PVW)">
+                                <button class="seg-item ${stageBusMode === "program" ? "active" : ""}" data-stage-bus="program">PGM</button>
+                                <button class="seg-item ${stageBusMode === "preview" ? "active" : ""}" data-stage-bus="preview">PVW</button>
+                            </div>
+                        ` : ""}
                     </div>
                     <div class="field-row">
+                        <button class="btn btn-xs ${previewSelected ? "btn-amber" : ""}" id="btnCmpPreviewSel" title="Locally preview the currently selected USK/DSK/Box on this canvas even while Off Air (does not affect live output)">
+                            👁 Preview Selected
+                        </button>
                         <button class="btn btn-xs ${showGuides ? "btn-accent-soft" : ""}" id="btnCmpGuides">Guides</button>
                         <button class="btn btn-xs ${showSafeArea ? "btn-accent-soft" : ""}" id="btnCmpSafe">Safe Area</button>
                         <button class="btn btn-xs ${snapEnabled ? "btn-accent-soft" : ""}" id="btnCmpSnap">Snap</button>
@@ -562,6 +770,7 @@ const ViewCompose = (() => {
                 <div class="compose-body">
                     <div class="compose-stage-col">
                         <div class="compose-canvas-stage">
+                            ${renderStageStatusHtml(ws)}
                             <div class="stage-frame" id="composeStageFrame">
                                 <canvas id="composeCanvas" width="1920" height="1080"></canvas>
                                 ${showSafeArea ? `<div class="safe-guides"><div class="safe-action"></div><div class="safe-title"></div></div>` : ""}
@@ -619,6 +828,10 @@ const ViewCompose = (() => {
                 render(container);
             });
         });
+        container.querySelectorAll("[data-stage-bus]").forEach(btn => {
+            btn.addEventListener("click", () => { stageBusMode = btn.dataset.stageBus; render(container); });
+        });
+        container.querySelector("#btnCmpPreviewSel")?.addEventListener("click", () => { previewSelected = !previewSelected; render(container); });
         container.querySelector("#btnCmpGuides")?.addEventListener("click", () => { showGuides = !showGuides; render(container); });
         container.querySelector("#btnCmpSafe")?.addEventListener("click", () => { showSafeArea = !showSafeArea; render(container); });
         container.querySelector("#btnCmpSnap")?.addEventListener("click", () => { snapEnabled = !snapEnabled; render(container); });
@@ -729,6 +942,8 @@ const ViewCompose = (() => {
         const layer = getCurrentLayerObj(ws);
         if (!layer) return;
         container.querySelector("#cmpLayerEnabled")?.addEventListener("change", (e) => SwitcherEngine.setLayerEnabled(ws, idx, e.target.checked, group));
+        container.querySelector("#cmpUskOnAirBtn")?.addEventListener("click", () => SwitcherEngine.setLayerEnabled(ws, idx, !layer.enabled, "usk"));
+        container.querySelector("#cmpUskStageBtn")?.addEventListener("click", () => SwitcherEngine.toggleNextTransitionKey(ws, idx));
         container.querySelector("#cmpLayerSource")?.addEventListener("change", (e) => SwitcherEngine.setLayerSource(ws, idx, e.target.value, group));
         container.querySelector("#cmpKeyType")?.addEventListener("change", (e) => {
             if (!setLayerKeyType(layer, e.target.value)) AppUI.toast("No free DVE channels available on this ATEM model.", "err");
@@ -736,6 +951,14 @@ const ViewCompose = (() => {
         });
         container.querySelector("#cmpFlyingKey")?.addEventListener("change", (e) => {
             if (!setFlyingKey(layer, e.target.checked)) AppUI.toast("No free DVE channels available.", "err");
+            SwitcherEngine.notify("flyingKey", true);
+        });
+        container.querySelector("#cmpQuickEnableDve")?.addEventListener("click", () => {
+            if (!setLayerKeyType(layer, "dve")) AppUI.toast("No free DVE channels available on this ATEM model.", "err");
+            SwitcherEngine.notify("keyType", true);
+        });
+        container.querySelector("#cmpQuickEnableFly")?.addEventListener("click", () => {
+            if (!setFlyingKey(layer, true)) AppUI.toast("No free DVE channels available.", "err");
             SwitcherEngine.notify("flyingKey", true);
         });
         container.querySelector("#cmpLumaClip")?.addEventListener("input", (e) => SwitcherEngine.setLumaSetting(ws, idx, "clip", Number(e.target.value)));

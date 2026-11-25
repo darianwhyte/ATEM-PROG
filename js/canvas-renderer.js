@@ -1470,21 +1470,60 @@ function renderMasterPreviewFrame() {
 
     function renderME(ctx, ws, opts = {}) {
         if (!ctx?.canvas || !ws) return;
-        if (opts.mode === "preview") {
-            renderMEOutputs(ws.resourceId, ctx.canvas, null);
-        } else {
-            renderMEOutputs(ws.resourceId, null, ctx.canvas);
+        const forceUskIdx = Number.isInteger(opts.forceShowUskIndex) ? opts.forceShowUskIndex : -1;
+        const forceDskIdx = Number.isInteger(opts.forceShowDskIndex) ? opts.forceShowDskIndex : -1;
+        const uskArr = ws.data?.usk || [];
+        const targetUsk = forceUskIdx >= 0 ? uskArr[forceUskIdx] : null;
+        const origUskEnabled = targetUsk ? targetUsk.enabled : null;
+        const targetDsk = (forceDskIdx >= 0 && ws.resourceId === 0) ? getDSK(forceDskIdx) : null;
+        const origDskEnabled = targetDsk ? targetDsk.enabled : null;
+        const origDskTie = targetDsk ? targetDsk.tie : null;
+
+        try {
+            if (targetUsk) {
+                if (opts.mode === "preview") {
+                    const ntFlag = !!(ws.data?.nextTransition?.usk?.[forceUskIdx]);
+                    targetUsk.enabled = !ntFlag;
+                } else {
+                    targetUsk.enabled = true;
+                }
+            }
+            if (targetDsk) {
+                targetDsk.enabled = true;
+                if (opts.mode === "preview") targetDsk.tie = false;
+            }
+
+            if (opts.mode === "preview") {
+                renderMEOutputs(ws.resourceId, ctx.canvas, null);
+            } else {
+                renderMEOutputs(ws.resourceId, null, ctx.canvas);
+            }
+        } finally {
+            if (targetUsk && origUskEnabled !== null) targetUsk.enabled = origUskEnabled;
+            if (targetDsk && origDskEnabled !== null) {
+                targetDsk.enabled = origDskEnabled;
+                targetDsk.tie = origDskTie;
+            }
         }
     }
 
-    function renderSuperSource(ctx, ws) {
+    function renderSuperSource(ctx, ws, opts = {}) {
         if (!ctx?.canvas || !ws) return;
-        const src = getSourceById(`superSource${ws.resourceId + 1}`) || {
-            type: SourceTypes.SUPERSOURCE,
-            id: `superSource${ws.resourceId + 1}`,
-            resourceId: ws.resourceId
-        };
-        renderSourceRaster(src, ctx.canvas, []);
+        const forceBoxIdx = Number.isInteger(opts.forceShowBoxIndex) ? opts.forceShowBoxIndex : -1;
+        const targetBox = forceBoxIdx >= 0 ? ws.data?.boxes?.[forceBoxIdx] : null;
+        const origBoxEnabled = targetBox ? targetBox.enabled : null;
+
+        try {
+            if (targetBox) targetBox.enabled = true;
+            const src = getSourceById(`superSource${ws.resourceId + 1}`) || {
+                type: SourceTypes.SUPER_SOURCE,
+                id: `superSource${ws.resourceId + 1}`,
+                resourceId: ws.resourceId
+            };
+            renderSourceRaster(src, ctx.canvas, []);
+        } finally {
+            if (targetBox && origBoxEnabled !== null) targetBox.enabled = origBoxEnabled;
+        }
     }
 
     function renderSource(ctx, sourceId) {

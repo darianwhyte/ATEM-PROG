@@ -1,9 +1,10 @@
 // =========================================================================
 // VIEW 1: MODULAR, RESIZABLE SWITCHER CONSOLE (js/ui/view-switcher.js)
-// - Every section (Monitors, Source Bus, Transition & DSK, Aux, Macros,
-//   Quick Sources) can be shown/hidden, reordered (▲/▼), and height-scaled!
-// - Tactile Bus Button Scale (S / M / L)
-// - Built-in + User-Creatable Custom Source Bus Filter Pages with Shift+1..9 hotkeys
+// - 12-column modular grid: drag-and-drop panels to reorganize, place
+//   panels side-by-side (⅓ / ½ / ⅔ / Full or drag right edge / corner),
+//   toggle internal Horizontal / Vertical orientation, and scale height!
+// - Tactile Bus Button Scale (S / M / L) & 1-click Layout Presets
+// - Built-in + User-Creatable Custom Source Bus Filter Pages (Shift+1..9)
 // =========================================================================
 
 const ViewSwitcher = (() => {
@@ -11,9 +12,48 @@ const ViewSwitcher = (() => {
     const DEFAULT_LAYOUT = {
         order: ["monitors", "bus", "transDsk", "aux", "macros", "sources"],
         visible: { monitors: true, bus: true, transDsk: true, aux: false, macros: false, sources: false },
-        heights: { monitors: 300, bus: 0, transDsk: 0, aux: 150, macros: 175, sources: 190 },
+        heights: { monitors: 300, bus: 0, transDsk: 0, aux: 170, macros: 185, sources: 200 },
+        spans: { monitors: 12, bus: 12, transDsk: 12, aux: 6, macros: 6, sources: 6 },
+        orientations: { monitors: "row", bus: "row", transDsk: "row" }, // "row" | "col"
         buttonScale: "md" // "sm" | "md" | "lg"
     };
+
+    const LAYOUT_PRESETS = {
+        stacked: {
+            label: "Stacked",
+            order: ["monitors", "bus", "transDsk", "aux", "macros", "sources"],
+            visible: { monitors: true, bus: true, transDsk: true, aux: false, macros: false, sources: false },
+            heights: { monitors: 300, bus: 0, transDsk: 0, aux: 170, macros: 185, sources: 200 },
+            spans: { monitors: 12, bus: 12, transDsk: 12, aux: 6, macros: 6, sources: 6 },
+            orientations: { monitors: "row", bus: "row", transDsk: "row" }
+        },
+        sideBySide: {
+            label: "Side-by-Side",
+            order: ["monitors", "bus", "transDsk", "macros", "aux", "sources"],
+            visible: { monitors: true, bus: true, transDsk: true, aux: false, macros: true, sources: false },
+            heights: { monitors: 400, bus: 400, transDsk: 0, aux: 180, macros: 0, sources: 200 },
+            spans: { monitors: 6, bus: 6, transDsk: 8, aux: 6, macros: 4, sources: 6 },
+            orientations: { monitors: "col", bus: "col", transDsk: "row" }
+        },
+        verticalDesk: {
+            label: "Vertical Monitors",
+            order: ["monitors", "bus", "transDsk", "aux", "macros", "sources"],
+            visible: { monitors: true, bus: true, transDsk: true, aux: true, macros: false, sources: false },
+            heights: { monitors: 440, bus: 0, transDsk: 0, aux: 220, macros: 185, sources: 200 },
+            spans: { monitors: 4, bus: 8, transDsk: 8, aux: 4, macros: 6, sources: 6 },
+            orientations: { monitors: "col", bus: "row", transDsk: "row" }
+        },
+        broadcast: {
+            label: "Full Studio Grid",
+            order: ["monitors", "aux", "bus", "transDsk", "macros", "sources"],
+            visible: { monitors: true, bus: true, transDsk: true, aux: true, macros: true, sources: true },
+            heights: { monitors: 300, bus: 0, transDsk: 0, aux: 300, macros: 0, sources: 185 },
+            spans: { monitors: 8, bus: 12, transDsk: 8, aux: 4, macros: 4, sources: 12 },
+            orientations: { monitors: "row", bus: "row", transDsk: "row" }
+        }
+    };
+
+    const ORIENTABLE_BLOCKS = new Set(["monitors", "bus", "transDsk"]);
 
     let layout = loadLayout();
     let showLayoutMenu = false;
@@ -21,16 +61,28 @@ const ViewSwitcher = (() => {
     let editingPageId = null;
     let macroBank = 0;
     let quickSSIndex = 0;
+    let draggingBlockId = null;
+
+    function clampSpan(n) {
+        const v = Math.round(Number(n) || 12);
+        return Math.max(3, Math.min(12, v));
+    }
 
     function loadLayout() {
         try {
             const raw = localStorage.getItem(LAYOUT_KEY);
             if (!raw) return JSON.parse(JSON.stringify(DEFAULT_LAYOUT));
             const p = JSON.parse(raw);
+            const savedOrder = Array.isArray(p.order) ? p.order.filter(k => DEFAULT_LAYOUT.order.includes(k)) : [];
+            DEFAULT_LAYOUT.order.forEach(k => { if (!savedOrder.includes(k)) savedOrder.push(k); });
+            const spans = { ...DEFAULT_LAYOUT.spans, ...(p.spans || {}) };
+            Object.keys(spans).forEach(k => { spans[k] = clampSpan(spans[k]); });
             return {
-                order: Array.isArray(p.order) ? p.order : [...DEFAULT_LAYOUT.order],
+                order: savedOrder,
                 visible: { ...DEFAULT_LAYOUT.visible, ...(p.visible || {}) },
                 heights: { ...DEFAULT_LAYOUT.heights, ...(p.heights || {}) },
+                spans,
+                orientations: { ...DEFAULT_LAYOUT.orientations, ...(p.orientations || {}) },
                 buttonScale: ["sm", "md", "lg"].includes(p.buttonScale) ? p.buttonScale : "md"
             };
         } catch {
@@ -40,6 +92,20 @@ const ViewSwitcher = (() => {
 
     function saveLayout() {
         try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch {}
+    }
+
+    function applyLayoutPreset(presetKey) {
+        const p = LAYOUT_PRESETS[presetKey];
+        if (!p) return;
+        layout = {
+            ...layout,
+            order: [...p.order],
+            visible: { ...p.visible },
+            heights: { ...p.heights },
+            spans: { ...p.spans },
+            orientations: { ...p.orientations }
+        };
+        saveLayout();
     }
 
     function getMacroBank() {
@@ -131,22 +197,47 @@ const ViewSwitcher = (() => {
 
     function blockShell(id, title, rightHtml, bodyHtml) {
         const h = layout.heights[id] || 0;
-        const styleAttr = h > 0 ? `style="height:${h}px;"` : "";
+        const span = clampSpan(layout.spans[id] || 12);
+        const orient = layout.orientations[id] || "row";
+        const isOrientable = ORIENTABLE_BLOCKS.has(id);
+        const styleParts = [`grid-column: span ${span};`];
+        if (h > 0) styleParts.push(`height:${h}px;`);
+
+        const spanPresets = [
+            [4, "⅓"],
+            [6, "½"],
+            [8, "⅔"],
+            [12, "Full"]
+        ];
+
         return `
-            <section class="sw-block" data-block-id="${id}" ${styleAttr}>
-                <div class="sw-block-head">
-                    <div class="field-row" style="gap:6px;">
+            <section class="sw-block" data-block-id="${id}" style="${styleParts.join(" ")}">
+                <div class="sw-block-head" draggable="true" data-drag-head="${id}">
+                    <div class="field-row" style="gap:6px; flex-wrap:wrap; min-width:0;">
+                        <span class="sw-drag-grip" title="Drag panel header to reorganize">⋮⋮</span>
                         <span class="section-label">${title}</span>
                         ${rightHtml || ""}
                     </div>
-                    <div class="field-row" style="gap:3px;">
-                        <button class="btn btn-xs btn-ghost" data-move-up="${id}" title="Move section up">▲</button>
-                        <button class="btn btn-xs btn-ghost" data-move-dn="${id}" title="Move section down">▼</button>
-                        <button class="btn btn-xs btn-ghost" data-hide-blk="${id}" title="Hide section">✕</button>
+                    <div class="field-row" style="gap:4px; flex-shrink:0;">
+                        ${isOrientable ? `
+                            <button class="btn btn-xs btn-ghost" data-orient-blk="${id}" title="Toggle Side-by-Side (H) / Vertical Stacked (V) layout inside panel">
+                                ${orient === "col" ? "⇅ V" : "⇄ H"}
+                            </button>
+                        ` : ""}
+                        <div class="sw-span-seg" title="Panel width (or drag right edge / corner)">
+                            ${spanPresets.map(([cols, lbl]) => `
+                                <button class="sw-span-btn ${span === cols ? "active" : ""}" data-span-blk="${id}" data-span-val="${cols}">${lbl}</button>
+                            `).join("")}
+                        </div>
+                        <button class="btn btn-xs btn-ghost" data-move-up="${id}" title="Move panel earlier">◀</button>
+                        <button class="btn btn-xs btn-ghost" data-move-dn="${id}" title="Move panel later">▶</button>
+                        <button class="btn btn-xs btn-ghost" data-hide-blk="${id}" title="Hide panel">✕</button>
                     </div>
                 </div>
                 <div class="sw-block-body">${bodyHtml}</div>
-                <div class="sw-resize-bar" data-resize-blk="${id}" title="Drag to resize section height (double-click to auto-fit)"></div>
+                <div class="sw-resize-bar" data-resize-blk="${id}" title="Drag to scale height (double-click to auto-fit)"></div>
+                <div class="sw-resize-right" data-resize-w-blk="${id}" title="Drag to scale width across columns (double-click for full width)"></div>
+                <div class="sw-resize-corner" data-resize-both-blk="${id}" title="Drag corner to scale both width & height"></div>
             </section>
         `;
     }
@@ -156,10 +247,13 @@ const ViewSwitcher = (() => {
         const d = meWs.data;
         const profile = getProfile() || {};
         const maxUsks = getUpstreamKeyersPerME(profile);
+        const span = clampSpan(layout.spans[id] || 12);
+        const orient = layout.orientations[id] || "row";
 
         if (id === "monitors") {
+            const vertical = orient === "col";
             const body = `
-                <div class="monitors-row" style="height:100%; min-height:140px;">
+                <div class="monitors-row ${vertical ? "is-vertical" : ""}" style="height:100%;">
                     <div class="monitor-card pvw" style="height:100%;">
                         <div class="monitor-head">
                             <span class="badge green">${esc(meWs.name)} · PVW</span>
@@ -190,6 +284,7 @@ const ViewSwitcher = (() => {
             const isCustomActive = busFilter.startsWith("custom:");
             const activeCustomRawId = isCustomActive ? busFilter.slice(7) : null;
             const editPage = editingPageId ? (state.customBusPages || []).find(p => p.id === editingPageId) : null;
+            const vertical = orient === "col";
 
             const rightHtml = `
                 <div class="seg">
@@ -229,29 +324,41 @@ const ViewSwitcher = (() => {
                 </div>
             ` : "";
 
-            const body = `
+            const pgmButtons = filtered.map(s => `
+                <button class="src-btn ${d.source === s.id ? "on-pgm" : ""}" data-pgm="${esc(s.id)}" title="${esc(getSourceDisplayName(s.id))}">
+                    <span>${esc(getSourceShortName(s.id))}</span>
+                    <small>${esc(getSourceDisplayName(s.id))}</small>
+                </button>
+            `).join("") || `<span class="muted" style="font-size:11px;">No sources selected on this custom page — click ✎ Edit.</span>`;
+
+            const pvwButtons = filtered.map(s => `
+                <button class="src-btn ${d.previewSource === s.id ? "on-pvw" : ""}" data-pvw="${esc(s.id)}" title="${esc(getSourceDisplayName(s.id))}">
+                    <span>${esc(getSourceShortName(s.id))}</span>
+                    <small>${esc(getSourceDisplayName(s.id))}</small>
+                </button>
+            `).join("");
+
+            const body = vertical ? `
+                ${editorHtml}
+                <div class="bus-vertical-grid">
+                    <div class="bus-vertical-col">
+                        <span class="bus-row-tag pgm">PGM</span>
+                        <div class="bus-strip">${pgmButtons}</div>
+                    </div>
+                    <div class="bus-vertical-col">
+                        <span class="bus-row-tag pvw">PVW</span>
+                        <div class="bus-strip">${pvwButtons}</div>
+                    </div>
+                </div>
+            ` : `
                 ${editorHtml}
                 <div class="bus-row">
                     <span class="bus-row-tag pgm">PGM</span>
-                    <div class="bus-strip">
-                        ${filtered.map(s => `
-                            <button class="src-btn ${d.source === s.id ? "on-pgm" : ""}" data-pgm="${esc(s.id)}" title="${esc(getSourceDisplayName(s.id))}">
-                                <span>${esc(getSourceShortName(s.id))}</span>
-                                <small>${esc(getSourceDisplayName(s.id))}</small>
-                            </button>
-                        `).join("") || `<span class="muted" style="font-size:11px;">No sources selected on this custom page — click ✎ Edit.</span>`}
-                    </div>
+                    <div class="bus-strip">${pgmButtons}</div>
                 </div>
                 <div class="bus-row">
                     <span class="bus-row-tag pvw">PVW</span>
-                    <div class="bus-strip">
-                        ${filtered.map(s => `
-                            <button class="src-btn ${d.previewSource === s.id ? "on-pvw" : ""}" data-pvw="${esc(s.id)}" title="${esc(getSourceDisplayName(s.id))}">
-                                <span>${esc(getSourceShortName(s.id))}</span>
-                                <small>${esc(getSourceDisplayName(s.id))}</small>
-                            </button>
-                        `).join("")}
-                    </div>
+                    <div class="bus-strip">${pvwButtons}</div>
                 </div>
             `;
             return blockShell("bus", `${esc(meWs.name)} Source Bus`, rightHtml, body);
@@ -260,8 +367,9 @@ const ViewSwitcher = (() => {
         if (id === "transDsk") {
             const dsks = getAvailableDSKs();
             const tbarVal = d.tbarReversed ? Math.round((1 - (d.transitionProgress || 0)) * 100) : Math.round((d.transitionProgress || 0) * 100);
+            const vertical = orient === "col" || span <= 6;
             const body = `
-                <div class="console-bottom-grid">
+                <div class="console-bottom-grid ${vertical ? "is-vertical" : ""}">
                     <div style="display:flex; flex-direction:column; gap:9px;">
                         <div class="field-row" style="justify-content:space-between; flex-wrap:wrap;">
                             <div class="field-row" style="gap:6px; flex-wrap:wrap;">
@@ -293,7 +401,7 @@ const ViewSwitcher = (() => {
                         </div>
                     </div>
 
-                    <div style="display:flex; flex-direction:column; gap:7px; border-left:1px solid var(--border); padding-left:12px;">
+                    <div class="dsk-col-wrap">
                         <div class="field-row" style="justify-content:space-between;">
                             <span class="section-label">Downstream Keyers</span>
                             <button class="btn btn-xs btn-ghost" id="btnSwEditDsk">Configure →</button>
@@ -323,7 +431,7 @@ const ViewSwitcher = (() => {
             const auxCount = profile.assignableOutputs || 0;
             const body = auxCount === 0
                 ? `<div class="muted" style="font-size:12px;">No Aux outputs on this ATEM model.</div>`
-                : `<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:8px;">
+                : `<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:8px;">
                     ${Array.from({ length: auxCount }, (_, i) => {
                         const ch = i + 1;
                         const out = getOutputData(ch);
@@ -348,7 +456,7 @@ const ViewSwitcher = (() => {
                 </select>
             `;
             const body = `
-                <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:7px;">
+                <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(138px, 1fr)); gap:7px;">
                     ${Array.from({ length: 10 }, (_, idx) => {
                         const slot = start + idx;
                         const m = state.macros[slot];
@@ -372,7 +480,7 @@ const ViewSwitcher = (() => {
             if (quickSSIndex >= ssList.length) quickSSIndex = 0;
             const activeSS = ssList[quickSSIndex];
             const body = `
-                <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(195px, 1fr)); gap:8px;">
+                <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:8px;">
                     ${(meWs.data.usk || []).slice(0, maxUsks).map((u, idx) => `
                         <div class="field" style="padding:7px 9px; border-radius:6px; background:var(--bg-elevated); border:1px solid var(--border);">
                             <label><span>USK ${idx + 1}</span><button class="btn btn-xs ${u.enabled ? "btn-pgm solid" : ""}" data-q-usk-air="${idx}">${u.enabled ? "ON AIR" : "Off"}</button></label>
@@ -393,83 +501,22 @@ const ViewSwitcher = (() => {
         return "";
     }
 
-    function render(container) {
-        const savedScrollTop = container.querySelector(".switcher-main")?.scrollTop || 0;
-        const esc = AppUI.esc;
-        const meList = state.workspaces.filter(w => w.type === "me" && isWorkspaceAvailable(w));
-        const meWs = getActiveMEWorkspace();
-        const blockLabels = {
-            monitors: "Monitors",
-            bus: "Source Bus",
-            transDsk: "Transition & DSK",
-            aux: "Aux Outputs",
-            macros: "Macro Pads",
-            sources: "Quick Sources"
-        };
+    function showResizeHud(blk, text) {
+        let hud = blk.querySelector(".sw-resize-hud");
+        if (!hud) {
+            hud = document.createElement("div");
+            hud.className = "sw-resize-hud";
+            blk.appendChild(hud);
+        }
+        hud.textContent = text;
+    }
 
-        container.innerHTML = `
-            <div class="switcher-view sw-scale-${layout.buttonScale}">
-                <div class="subbar">
-                    <div class="field-row">
-                        <div class="seg">
-                            ${meList.map(w => `<button class="seg-item ${w.resourceId === meWs.resourceId ? "active" : ""}" data-me-tab="${w.resourceId}">${esc(w.name)}</button>`).join("")}
-                        </div>
-                        <span class="muted" style="font-size:11px;">Space=CUT · Enter=AUTO · Shift+1–9=Bus Pages · F1–F5=Views</span>
-                    </div>
-                    <div class="field-row">
-                        <button class="btn btn-sm" id="btnSwSnap">Snapshot</button>
-                        <button class="btn btn-sm btn-danger-text" id="btnSwRec">● Record</button>
-                        <button class="btn btn-sm ${showLayoutMenu ? "btn-accent-soft" : ""}" id="btnSwLayout">⊞ Customize Layout</button>
-                    </div>
-                </div>
+    function removeResizeHud(blk) {
+        blk.querySelector(".sw-resize-hud")?.remove();
+    }
 
-                ${showLayoutMenu ? `
-                    <div style="padding:10px 16px; background:var(--bg-elevated); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-                        <div class="field-row" style="gap:10px; flex-wrap:wrap;">
-                            <span class="section-label">Panels</span>
-                            ${Object.entries(blockLabels).map(([k, lbl]) => `
-                                <label class="check-row" style="font-size:12px;">
-                                    <input type="checkbox" data-vis-blk="${k}" ${layout.visible[k] ? "checked" : ""}>
-                                    ${lbl}
-                                </label>
-                            `).join("")}
-                        </div>
-                        <div class="field-row" style="gap:8px;">
-                            <span class="section-label">Button Size</span>
-                            <div class="seg">
-                                ${[["sm","S"],["md","M"],["lg","L"]].map(([v,l]) => `<button class="seg-item ${layout.buttonScale === v ? "active" : ""}" data-bscale="${v}">${l}</button>`).join("")}
-                            </div>
-                            <button class="btn btn-xs" id="btnSwResetLayout">↺ Reset</button>
-                        </div>
-                    </div>
-                ` : ""}
-
-                <div class="switcher-main" id="swBlockStack">
-                    ${layout.order.filter(id => layout.visible[id]).map(id => renderBlockHtml(id, meWs)).join("")}
-                </div>
-            </div>
-        `;
-
-        // Wire subbar & layout customization
-        container.querySelectorAll("[data-me-tab]").forEach(btn => {
-            btn.addEventListener("click", () => { AppUI.activeME = Number(btn.dataset.meTab); render(container); });
-        });
-        container.querySelector("#btnSwSnap")?.addEventListener("click", () => OverlaysUI.openMacroCreateModal("snapshot"));
-        container.querySelector("#btnSwRec")?.addEventListener("click", () => OverlaysUI.openMacroCreateModal("record"));
-        container.querySelector("#btnSwLayout")?.addEventListener("click", () => { showLayoutMenu = !showLayoutMenu; render(container); });
-        container.querySelectorAll("[data-vis-blk]").forEach(chk => {
-            chk.addEventListener("change", (e) => { layout.visible[chk.dataset.visBlk] = e.target.checked; saveLayout(); render(container); });
-        });
-        container.querySelectorAll("[data-bscale]").forEach(btn => {
-            btn.addEventListener("click", () => { layout.buttonScale = btn.dataset.bscale; saveLayout(); render(container); });
-        });
-        container.querySelector("#btnSwResetLayout")?.addEventListener("click", () => {
-            layout = JSON.parse(JSON.stringify(DEFAULT_LAYOUT));
-            saveLayout();
-            render(container);
-        });
-
-        // Reorder, Hide & Resize section handles
+    function wireBlockLayoutInteractions(container) {
+        // 1. Move panel earlier / later
         container.querySelectorAll("[data-move-up]").forEach(btn => {
             btn.addEventListener("click", () => {
                 const id = btn.dataset.moveUp;
@@ -498,9 +545,75 @@ const ViewSwitcher = (() => {
                 }
             });
         });
+
+        // 2. Width preset buttons (⅓ / ½ / ⅔ / Full) & H/V Orientation toggle & Hide
+        container.querySelectorAll("[data-span-blk]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const id = btn.dataset.spanBlk;
+                layout.spans[id] = clampSpan(btn.dataset.spanVal);
+                saveLayout();
+                render(container);
+            });
+        });
+        container.querySelectorAll("[data-orient-blk]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const id = btn.dataset.orientBlk;
+                layout.orientations[id] = layout.orientations[id] === "col" ? "row" : "col";
+                saveLayout();
+                render(container);
+            });
+        });
         container.querySelectorAll("[data-hide-blk]").forEach(btn => {
             btn.addEventListener("click", () => { layout.visible[btn.dataset.hideBlk] = false; saveLayout(); render(container); });
         });
+
+        // 3. Direct Drag-and-Drop Reorganizing across the grid
+        container.querySelectorAll("[data-drag-head]").forEach(head => {
+            const id = head.dataset.dragHead;
+            head.addEventListener("dragstart", (e) => {
+                if (e.target.closest("button, select, input, label")) {
+                    e.preventDefault();
+                    return;
+                }
+                draggingBlockId = id;
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", id);
+                container.querySelector(`[data-block-id="${id}"]`)?.classList.add("dragging");
+            });
+            head.addEventListener("dragend", () => {
+                draggingBlockId = null;
+                container.querySelectorAll(".sw-block").forEach(b => b.classList.remove("dragging", "drag-over"));
+            });
+        });
+
+        container.querySelectorAll(".sw-block").forEach(blk => {
+            const targetId = blk.dataset.blockId;
+            blk.addEventListener("dragover", (e) => {
+                if (!draggingBlockId || draggingBlockId === targetId) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                blk.classList.add("drag-over");
+            });
+            blk.addEventListener("dragleave", (e) => {
+                if (!blk.contains(e.relatedTarget)) blk.classList.remove("drag-over");
+            });
+            blk.addEventListener("drop", (e) => {
+                e.preventDefault();
+                blk.classList.remove("drag-over");
+                const fromId = draggingBlockId || e.dataTransfer.getData("text/plain");
+                if (!fromId || fromId === targetId) return;
+                const fromIdx = layout.order.indexOf(fromId);
+                const toIdx = layout.order.indexOf(targetId);
+                if (fromIdx < 0 || toIdx < 0) return;
+                layout.order.splice(fromIdx, 1);
+                layout.order.splice(toIdx, 0, fromId);
+                draggingBlockId = null;
+                saveLayout();
+                render(container);
+            });
+        });
+
+        // 4. Vertical Height Resize (Bottom Edge)
         container.querySelectorAll("[data-resize-blk]").forEach(bar => {
             const id = bar.dataset.resizeBlk;
             bar.addEventListener("dblclick", () => { layout.heights[id] = 0; saveLayout(); render(container); });
@@ -511,20 +624,192 @@ const ViewSwitcher = (() => {
                 const startY = e.clientY;
                 const startH = blk.getBoundingClientRect().height;
                 const onMove = (ev) => {
-                    const nextH = Math.max(96, Math.min(720, Math.round(startH + (ev.clientY - startY))));
+                    const nextH = Math.max(96, Math.min(820, Math.round(startH + (ev.clientY - startY))));
                     blk.style.height = `${nextH}px`;
                     layout.heights[id] = nextH;
+                    showResizeHud(blk, `${nextH}px height`);
                     if (id === "monitors") renderCanvases();
                 };
                 const onUp = () => {
                     window.removeEventListener("pointermove", onMove);
                     window.removeEventListener("pointerup", onUp);
+                    removeResizeHud(blk);
                     saveLayout();
                 };
                 window.addEventListener("pointermove", onMove);
                 window.addEventListener("pointerup", onUp);
             });
         });
+
+        // 5. Horizontal Column Width Resize (Right Edge)
+        container.querySelectorAll("[data-resize-w-blk]").forEach(edge => {
+            const id = edge.dataset.resizeWBlk;
+            edge.addEventListener("dblclick", () => { layout.spans[id] = 12; saveLayout(); render(container); });
+            edge.addEventListener("pointerdown", (e) => {
+                e.preventDefault();
+                const blk = container.querySelector(`[data-block-id="${id}"]`);
+                const stack = container.querySelector("#swBlockStack");
+                if (!blk || !stack) return;
+                const startX = e.clientX;
+                const startSpan = clampSpan(layout.spans[id] || 12);
+                const gridW = Math.max(360, stack.getBoundingClientRect().width - 32);
+                const colW = gridW / 12;
+                let lastSpan = startSpan;
+
+                const onMove = (ev) => {
+                    const deltaCols = Math.round((ev.clientX - startX) / colW);
+                    const nextSpan = clampSpan(startSpan + deltaCols);
+                    showResizeHud(blk, `${nextSpan} / 12 cols (${Math.round((nextSpan / 12) * 100)}%)`);
+                    if (nextSpan !== lastSpan) {
+                        lastSpan = nextSpan;
+                        layout.spans[id] = nextSpan;
+                        blk.style.gridColumn = `span ${nextSpan}`;
+                        if (id === "monitors") renderCanvases();
+                    }
+                };
+                const onUp = () => {
+                    window.removeEventListener("pointermove", onMove);
+                    window.removeEventListener("pointerup", onUp);
+                    removeResizeHud(blk);
+                    saveLayout();
+                    render(container);
+                };
+                window.addEventListener("pointermove", onMove);
+                window.addEventListener("pointerup", onUp);
+            });
+        });
+
+        // 6. Dual-Axis Corner Resize (Width Columns + Height Simultaneously)
+        container.querySelectorAll("[data-resize-both-blk]").forEach(corner => {
+            const id = corner.dataset.resizeBothBlk;
+            corner.addEventListener("dblclick", () => {
+                layout.spans[id] = 12;
+                layout.heights[id] = 0;
+                saveLayout();
+                render(container);
+            });
+            corner.addEventListener("pointerdown", (e) => {
+                e.preventDefault();
+                const blk = container.querySelector(`[data-block-id="${id}"]`);
+                const stack = container.querySelector("#swBlockStack");
+                if (!blk || !stack) return;
+                const startX = e.clientX;
+                const startY = e.clientY;
+                const startH = blk.getBoundingClientRect().height;
+                const startSpan = clampSpan(layout.spans[id] || 12);
+                const gridW = Math.max(360, stack.getBoundingClientRect().width - 32);
+                const colW = gridW / 12;
+
+                const onMove = (ev) => {
+                    const nextH = Math.max(96, Math.min(820, Math.round(startH + (ev.clientY - startY))));
+                    const nextSpan = clampSpan(startSpan + Math.round((ev.clientX - startX) / colW));
+                    blk.style.height = `${nextH}px`;
+                    blk.style.gridColumn = `span ${nextSpan}`;
+                    layout.heights[id] = nextH;
+                    layout.spans[id] = nextSpan;
+                    showResizeHud(blk, `${nextSpan}/12 cols · ${nextH}px`);
+                    if (id === "monitors") renderCanvases();
+                };
+                const onUp = () => {
+                    window.removeEventListener("pointermove", onMove);
+                    window.removeEventListener("pointerup", onUp);
+                    removeResizeHud(blk);
+                    saveLayout();
+                    render(container);
+                };
+                window.addEventListener("pointermove", onMove);
+                window.addEventListener("pointerup", onUp);
+            });
+        });
+    }
+
+    function render(container) {
+        const savedScrollTop = container.querySelector(".switcher-main")?.scrollTop || 0;
+        const esc = AppUI.esc;
+        const meList = state.workspaces.filter(w => w.type === "me" && isWorkspaceAvailable(w));
+        const meWs = getActiveMEWorkspace();
+        const blockLabels = {
+            monitors: "Monitors",
+            bus: "Source Bus",
+            transDsk: "Transition & DSK",
+            aux: "Aux Outputs",
+            macros: "Macro Pads",
+            sources: "Quick Sources"
+        };
+
+        container.innerHTML = `
+            <div class="switcher-view sw-scale-${layout.buttonScale}">
+                <div class="subbar">
+                    <div class="field-row">
+                        <div class="seg">
+                            ${meList.map(w => `<button class="seg-item ${w.resourceId === meWs.resourceId ? "active" : ""}" data-me-tab="${w.resourceId}">${esc(w.name)}</button>`).join("")}
+                        </div>
+                        <span class="muted" style="font-size:11px;">Space=CUT · Enter=AUTO · Shift+1–9=Bus Pages · Drag ⋮⋮ or edges to arrange panels</span>
+                    </div>
+                    <div class="field-row">
+                        <button class="btn btn-sm" id="btnSwSnap">Snapshot</button>
+                        <button class="btn btn-sm btn-danger-text" id="btnSwRec">● Record</button>
+                        <button class="btn btn-sm ${showLayoutMenu ? "btn-accent-soft" : ""}" id="btnSwLayout">⊞ Customize Layout</button>
+                    </div>
+                </div>
+
+                ${showLayoutMenu ? `
+                    <div style="padding:10px 16px; background:var(--bg-elevated); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+                        <div class="field-row" style="gap:10px; flex-wrap:wrap;">
+                            <span class="section-label">Panels</span>
+                            ${Object.entries(blockLabels).map(([k, lbl]) => `
+                                <label class="check-row" style="font-size:12px;">
+                                    <input type="checkbox" data-vis-blk="${k}" ${layout.visible[k] ? "checked" : ""}>
+                                    ${lbl}
+                                </label>
+                            `).join("")}
+                        </div>
+                        <div class="field-row" style="gap:8px; flex-wrap:wrap;">
+                            <span class="section-label">Presets</span>
+                            <div class="seg">
+                                ${Object.entries(LAYOUT_PRESETS).map(([pk, pv]) => `
+                                    <button class="seg-item" data-layout-preset="${pk}">${esc(pv.label)}</button>
+                                `).join("")}
+                            </div>
+                            <span class="section-label">Buttons</span>
+                            <div class="seg">
+                                ${[["sm","S"],["md","M"],["lg","L"]].map(([v,l]) => `<button class="seg-item ${layout.buttonScale === v ? "active" : ""}" data-bscale="${v}">${l}</button>`).join("")}
+                            </div>
+                            <button class="btn btn-xs" id="btnSwResetLayout">↺ Reset</button>
+                        </div>
+                    </div>
+                ` : ""}
+
+                <div class="switcher-main" id="swBlockStack">
+                    ${layout.order.filter(id => layout.visible[id]).map(id => renderBlockHtml(id, meWs)).join("")}
+                </div>
+            </div>
+        `;
+
+        // Wire subbar & layout customization
+        container.querySelectorAll("[data-me-tab]").forEach(btn => {
+            btn.addEventListener("click", () => { AppUI.activeME = Number(btn.dataset.meTab); render(container); });
+        });
+        container.querySelector("#btnSwSnap")?.addEventListener("click", () => OverlaysUI.openMacroCreateModal("snapshot"));
+        container.querySelector("#btnSwRec")?.addEventListener("click", () => OverlaysUI.openMacroCreateModal("record"));
+        container.querySelector("#btnSwLayout")?.addEventListener("click", () => { showLayoutMenu = !showLayoutMenu; render(container); });
+        container.querySelectorAll("[data-vis-blk]").forEach(chk => {
+            chk.addEventListener("change", (e) => { layout.visible[chk.dataset.visBlk] = e.target.checked; saveLayout(); render(container); });
+        });
+        container.querySelectorAll("[data-layout-preset]").forEach(btn => {
+            btn.addEventListener("click", () => { applyLayoutPreset(btn.dataset.layoutPreset); render(container); });
+        });
+        container.querySelectorAll("[data-bscale]").forEach(btn => {
+            btn.addEventListener("click", () => { layout.buttonScale = btn.dataset.bscale; saveLayout(); render(container); });
+        });
+        container.querySelector("#btnSwResetLayout")?.addEventListener("click", () => {
+            layout = JSON.parse(JSON.stringify(DEFAULT_LAYOUT));
+            saveLayout();
+            render(container);
+        });
+
+        // Wire drag-and-drop, column spans, H/V toggle, height/width/corner resizers
+        wireBlockLayoutInteractions(container);
 
         // Custom Source Bus Filter Pages
         container.querySelectorAll("[data-bfilter]").forEach(btn => {

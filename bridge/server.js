@@ -96,10 +96,25 @@ const server = http.createServer((req, res) => {
             return;
         }
 
+        const isLocalRequest = () => {
+            const remoteAddr = req.socket?.remoteAddress || "";
+            return ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(remoteAddr);
+        };
+
+        const readJsonBody = () => new Promise((resolve) => {
+            let body = "";
+            req.on("data", chunk => {
+                if (body.length < 16384) body += chunk.toString("utf8");
+            });
+            req.on("end", () => {
+                try { resolve(body ? JSON.parse(body) : {}); } catch { resolve({}); }
+            });
+            req.on("error", () => resolve({}));
+        });
+
         // Clean Shutdown API (Restricted strictly to localhost callers!)
         if (reqPath === "/api/shutdown" && req.method === "POST") {
-            const remoteAddr = req.socket?.remoteAddress || "";
-            if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(remoteAddr)) {
+            if (!isLocalRequest()) {
                 res.writeHead(403);
                 res.end("Forbidden");
                 return;
@@ -108,6 +123,72 @@ const server = http.createServer((req, res) => {
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ ok: true }));
             setTimeout(() => process.exit(0), 250);
+            return;
+        }
+
+        // Localhost mDNS Discovery API (for native desktop launchers)
+        if (reqPath === "/api/discover" && req.method === "POST") {
+            if (!isLocalRequest()) {
+                res.writeHead(403);
+                res.end("Forbidden");
+                return;
+            }
+            addLog("Scanning LAN for Blackmagic ATEM switchers via mDNS...");
+            discoverBlackmagicDevices(2200).then((devices) => {
+                addLog(`mDNS scan complete: ${devices.length} device(s) found.`);
+                res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+                res.end(JSON.stringify({ ok: true, devices }));
+            }).catch((err) => {
+                res.writeHead(500, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ ok: false, error: String(err?.message || err), devices: [] }));
+            });
+            return;
+        }
+
+        // Localhost ATEM Connect API (for native desktop launchers)
+        if (reqPath === "/api/connect" && req.method === "POST") {
+            if (!isLocalRequest()) {
+                res.writeHead(403);
+                res.end("Forbidden");
+                return;
+            }
+            readJsonBody().then(async (body) => {
+                const ip = String(body.ip || "").trim();
+                if (!ip) {
+                    res.writeHead(400, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify({ ok: false, error: "Missing ATEM IP address." }));
+                    return;
+                }
+                currentIp = ip;
+                addLog(`Connecting to ATEM at ${ip}...`);
+                try {
+                    await atem.disconnect().catch(() => {});
+                    await atem.connect(ip);
+                    res.writeHead(200, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify({ ok: true, ip }));
+                } catch (err) {
+                    addLog(`ATEM connect failed (${ip}): ${err.message}`);
+                    res.writeHead(500, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify({ ok: false, error: err.message }));
+                }
+            });
+            return;
+        }
+
+        // Localhost ATEM Disconnect API (for native desktop launchers)
+        if (reqPath === "/api/disconnect" && req.method === "POST") {
+            if (!isLocalRequest()) {
+                res.writeHead(403);
+                res.end("Forbidden");
+                return;
+            }
+            atem.disconnect().catch(() => {}).finally(() => {
+                isConnected = false;
+                addLog("Disconnected from ATEM hardware.");
+                broadcast({ type: "status", connected: false, ip: currentIp, product: "" });
+                res.writeHead(200, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ ok: true }));
+            });
             return;
         }
 

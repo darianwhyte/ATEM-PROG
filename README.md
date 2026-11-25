@@ -26,10 +26,12 @@ Runs directly from `ATEM-PROG.html` (100% offline, no build step), or via the in
 ### Standalone Offline Mode (No Node.js Required)
 Simply open **`ATEM-PROG.html`** in Chrome, Edge, Brave, or Safari.
 
-### Windows (Full LAN + ATEM Hardware Service)
+### Windows (Native Taskbar & System Tray App)
 1. Install [Node.js LTS](https://nodejs.org).
-2. Double-click **`Launch-ATEM-PROG.bat`** — starts the background service silently (no lingering terminal window) and opens the compact **ATEM-PROG Launcher** window.
-3. *(Optional)* Double-click **`Create-Dock-Shortcut.bat`** to create a Desktop shortcut with the custom broadcast icon (right-click → **Pin to taskbar**).
+2. Double-click **`ATEM-PROG.exe`** — starts the local/LAN background service silently, lives in the **Windows System Tray** (bottom-right notification area), and opens a compact native **ATEM-PROG Launcher** window to launch the Web GUI, copy LAN Touch Remote URLs for iPads/phones, or scan/connect to ATEM hardware.
+   - Right-click **`ATEM-PROG.exe`** → **Pin to taskbar** to keep it directly on your taskbar (clicking it when minimized to tray reopens the launcher; closing the window minimizes to tray without stopping the service).
+   - *(Rebuild from source anytime with zero SDK required via `launcher\win\build.bat`.)*
+3. *(Optional)* Double-click **`Create-Dock-Shortcut.bat`** to add a Desktop shortcut for `ATEM-PROG.exe`.
 
 ### macOS (Native Dock App)
 1. Install [Node.js LTS](https://nodejs.org) (`brew install node`).

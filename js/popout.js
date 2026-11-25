@@ -134,7 +134,7 @@ const PopoutManager = (() => {
             .mv-select { position:absolute; bottom:6px; left:50%; transform:translateX(-50%); background:#0f131b; color:#22d3ee; border:1px solid #22d3ee; padding:3px 6px; border-radius:4px; font-family:monospace; font-size:11px; z-index:10; max-width:90%; }
         </style></head><body>
             <div class="mv-top-bar">
-                <span><strong>Multi-View ${mvIdx + 1}</strong> · Click tile = PVW · Double-click = PGM (or CUT on PVW) · Click label = Assign</span>
+                <span><strong>Multi-View ${mvIdx + 1}</strong> · Click = PVW · Double-click or Ctrl+Click = PGM (or CUT on PVW) · Click label = Assign</span>
                 <div class="mv-top-controls">
                     <select id="selMvPicker" title="Select Multi-View 1-4"></select>
                     <select id="selMvTargetME" title="Target M/E for click-to-switch"></select>
@@ -261,14 +261,17 @@ const PopoutManager = (() => {
             win.document.fullscreenElement ? win.document.exitFullscreen?.() : win.document.documentElement.requestFullscreen?.();
         });
 
+        let mvClickTimer = null;
+
         win.document.getElementById("mvGrid")?.addEventListener("click", (e) => {
             const labelEl = e.target.closest(".mv-label");
             if (labelEl) {
+                if (mvClickTimer) { clearTimeout(mvClickTimer); mvClickTimer = null; }
                 const idx = parseInt(labelEl.dataset.idx, 10);
                 const boxEl = labelEl.parentElement;
                 if (boxEl.querySelector("select")) return;
 
-                const mv = getMultiView(mvIdx);
+                const mv = getMultiView(entry.mvIdx);
                 const currentVal = mv.windows[idx] ?? "";
                 const groups = getRoutableMultiviewOptions();
                 const sel = win.document.createElement("select");
@@ -292,7 +295,7 @@ const PopoutManager = (() => {
                 sel.focus();
 
                 const commit = () => {
-                    SwitcherEngine.setMultiViewWindow(mvIdx, idx, sel.value);
+                    SwitcherEngine.setMultiViewWindow(entry.mvIdx, idx, sel.value);
                     buildGrid();
                 };
 
@@ -304,25 +307,52 @@ const PopoutManager = (() => {
                 return;
             }
 
-            // Single-click any tile canvas -> Punch source to Preview (PVW) on target M/E
             if (e.target.closest(".mv-select")) return;
             const boxEl = e.target.closest(".mv-box");
             if (!boxEl) return;
             const idx = parseInt(boxEl.dataset.idx, 10);
-            const mv = getMultiView(mvIdx);
+            const mv = getMultiView(entry.mvIdx);
             const srcId = mv.windows[idx] ?? "";
+
+            // Ctrl+Click (or Cmd+Click) -> Instant straight to Program (PGM), or CUT on PVW tile, without touching PVW
+            if (e.ctrlKey || e.metaKey) {
+                if (mvClickTimer) { clearTimeout(mvClickTimer); mvClickTimer = null; }
+                const pvwMatch = srcId.match(/^me(\d+)Preview$/);
+                if (pvwMatch) {
+                    const meIdx = parseInt(pvwMatch[1], 10) - 1;
+                    SwitcherEngine.performTransitionCut(meIdx, { record: true, emit: true });
+                    return;
+                }
+                if (/^me\d+Program$/.test(srcId) || /^output\d+$/.test(srcId)) return;
+                SwitcherEngine.setMEProgram(entry.targetMeIdx, srcId);
+                return;
+            }
+
             if (/^me\d+(Preview|Program)$/.test(srcId) || /^output\d+$/.test(srcId)) return;
 
-            SwitcherEngine.setMEPreview(entry.targetMeIdx, srcId);
+            // If this is the 2nd click of a double-click, cancel the pending PVW click so PVW is never altered
+            if (e.detail >= 2) {
+                if (mvClickTimer) { clearTimeout(mvClickTimer); mvClickTimer = null; }
+                return;
+            }
+
+            // Debounce single-click slightly so double-click punches ONLY to PGM without staging PVW first
+            if (mvClickTimer) clearTimeout(mvClickTimer);
+            const targetMe = entry.targetMeIdx;
+            mvClickTimer = setTimeout(() => {
+                mvClickTimer = null;
+                SwitcherEngine.setMEPreview(targetMe, srcId);
+            }, 220);
         });
 
-        // Double-click any tile canvas -> Punch directly to Program (PGM), or CUT if clicking PVW
+        // Double-click any tile canvas -> Punch directly to Program (PGM), or CUT if clicking PVW (never touching PVW)
         win.document.getElementById("mvGrid")?.addEventListener("dblclick", (e) => {
+            if (mvClickTimer) { clearTimeout(mvClickTimer); mvClickTimer = null; }
             if (e.target.closest(".mv-label, .mv-select")) return;
             const boxEl = e.target.closest(".mv-box");
             if (!boxEl) return;
             const idx = parseInt(boxEl.dataset.idx, 10);
-            const mv = getMultiView(mvIdx);
+            const mv = getMultiView(entry.mvIdx);
             const srcId = mv.windows[idx] ?? "";
 
             const pvwMatch = srcId.match(/^me(\d+)Preview$/);
