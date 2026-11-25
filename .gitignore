@@ -1,0 +1,14 @@
+# Node.js Bridge Dependencies
+bridge/node_modules/
+bridge/*.log
+
+# Local sample assets & temporary exports
+Thumbnails/
+Sample Export.xml
+
+# OS & Editor clutter
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+.vscode/

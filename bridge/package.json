@@ -1,0 +1,13 @@
+{
+  "name": "atem-prog-bridge",
+  "version": "1.0.0",
+  "description": "Lightweight local WebSocket-to-UDP bridge connecting ATEM-PROG.html to Blackmagic Design ATEM hardware over Ethernet (UDP 9910).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "atem-connection": "^3.2.0",
+    "ws": "^8.18.0"
+  }
+}

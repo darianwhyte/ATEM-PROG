@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ATEM-PROG Touch Remote</title>
+    <link rel="icon" type="image/svg+xml" href="assets/atem-prog-icon.svg">
+    <link rel="apple-touch-icon" href="assets/atem-prog-icon-192.png">
+    <link rel="manifest" href="assets/manifest.json">
+    <link rel="stylesheet" href="style.css">
+    <style>
+        body { overflow: hidden; touch-action: manipulation; }
+        .remote-shell { display: flex; flex-direction: column; height: 100vh; }
+        .remote-bar {
+            display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+            padding: 10px 14px; background: var(--bg-surface); border-bottom: 1px solid var(--border);
+        }
+        .remote-nav {
+            display: flex; gap: 6px; flex-wrap: wrap;
+        }
+        .remote-nav-btn {
+            min-height: 44px; padding: 0 16px; border-radius: 9px;
+            border: 1.5px solid var(--border-strong); background: var(--bg-elevated);
+            color: var(--text-muted); font-family: inherit; font-size: 14px; font-weight: 700;
+            cursor: pointer; transition: background 0.12s, border-color 0.12s, color 0.12s;
+        }
+        .remote-nav-btn.active {
+            background: var(--accent-bg); border-color: var(--accent); color: var(--text);
+        }
+        .remote-subrow {
+            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+        }
+        .remote-pill-btn {
+            min-height: 44px; padding: 0 16px; border-radius: 9px;
+            border: 1.5px solid var(--border); background: var(--bg-elevated);
+            color: var(--text-muted); font-family: inherit; font-size: 13px; font-weight: 700;
+            cursor: pointer;
+        }
+        .remote-pill-btn.active {
+            background: var(--accent); border-color: var(--accent); color: #05111b;
+        }
+        .remote-body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+        .touch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 9px; }
+        .touch-btn {
+            min-height: 66px; padding: 8px 6px; border-radius: 10px;
+            border: 1.5px solid var(--border-strong); background: var(--bg-elevated);
+            color: var(--text); font-family: var(--font-mono); font-size: 15px; font-weight: 700;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+            cursor: pointer;
+        }
+        .touch-btn small { font-family: var(--font-sans); font-size: 11px; font-weight: 500; opacity: 0.85; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .touch-btn.pgm { background: var(--pgm); border-color: var(--pgm); color: #fff; }
+        .touch-btn.pvw { background: var(--pvw); border-color: var(--pvw); color: #04160a; }
+        .take-bar { display: grid; grid-template-columns: 1fr 1fr 0.7fr; gap: 10px; }
+        .take-big { min-height: 64px; font-size: 17px; font-weight: 800; border-radius: 10px; }
+        .tally-lamp {
+            flex: 1; border-radius: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            gap: 10px; text-align: center; padding: 24px; border: 2px solid var(--border);
+            background: var(--bg-surface);
+        }
+        .tally-lamp.is-pgm { background: #dc2626; border-color: #fca5a5; color: #fff; }
+        .tally-lamp.is-pvw { background: #16a34a; border-color: #86efac; color: #fff; }
+    </style>
+</head>
+<body>
+<div class="remote-shell">
+    <div class="remote-bar">
+        <div class="field-row" style="gap:8px;">
+            <span class="status-dot" id="remDot"></span>
+            <strong id="remTitle" style="font-size:15px;">ATEM Touch Remote</strong>
+        </div>
+        <div class="remote-nav" id="remTabs">
+            <button class="remote-nav-btn active" data-tab="switch">Switch</button>
+            <button class="remote-nav-btn" data-tab="aux">Aux</button>
+            <button class="remote-nav-btn" data-tab="dsk">DSK</button>
+            <button class="remote-nav-btn" data-tab="macros">Macros</button>
+            <button class="remote-nav-btn" data-tab="tally">Tally</button>
+        </div>
+        <button class="remote-nav-btn" id="btnRemTheme" style="min-width:48px; padding:0 12px;" title="Cycle Theme">◐</button>
+    </div>
+    <div class="remote-body" id="remBody">
+        <div class="card" style="text-align:center; padding:28px;">
+            <strong>Waiting for ATEM-PROG Studio...</strong>
+            <p class="muted" style="font-size:13px;">Keep the main ATEM-PROG Web UI open on the host computer to sync M/Es, custom bus pages, Auxes, DSKs & Macros live.</p>
+        </div>
+    </div>
+</div>
+
+<script>
+    const THEMES = ["dark", "light", "contrast"];
+    let themeIdx = 0;
+    let activeTab = "switch";
+    let activeME = 0;
+    let busFilter = "all";
+    let tallyWatchSrc = "input1";
+    let studio = null;
+    let ws = null;
+
+    function connectWs() {
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        ws = new WebSocket(`${proto}//${location.host}`);
+        ws.addEventListener("open", () => {
+            document.getElementById("remDot").className = "status-dot online";
+        });
+        ws.addEventListener("close", () => {
+            document.getElementById("remDot").className = "status-dot";
+            setTimeout(connectWs, 2000);
+        });
+        ws.addEventListener("message", (ev) => {
+            try {
+                const msg = JSON.parse(ev.data);
+                if (msg.type === "studioState" && msg.studio) {
+                    studio = msg.studio;
+                    document.getElementById("remTitle").textContent = studio.projectName || "ATEM Remote";
+                    render();
+                }
+            } catch {}
+        });
+    }
+
+    function sendAction(action) {
+        if (ws && ws.readyState === 1) {
+            ws.send(JSON.stringify({ cmd: "remoteAction", action }));
+        }
+    }
+
+    function getBusPages() {
+        const custom = Array.isArray(studio?.customBusPages) ? studio.customBusPages : [];
+        return [
+            { id: "all", label: "All" },
+            { id: "external", label: "Inputs" },
+            { id: "internal", label: "Media / Gen" },
+            { id: "routing", label: "M/E & SS" },
+            ...custom.map(p => ({ id: `custom:${p.id}`, label: p.name, sources: p.sources || [] }))
+        ];
+    }
+
+    function filterSources(sources) {
+        if (busFilter === "all") return sources;
+        if (busFilter === "external") return sources.filter(s => s.type === "external" || s.id === "");
+        if (busFilter === "internal") return sources.filter(s => s.type === "mediaPlayer" || s.type === "mediaPlayerKey" || s.type === "generator");
+        if (busFilter === "routing") return sources.filter(s => s.type === "me" || s.type === "superSource");
+        if (busFilter.startsWith("custom:")) {
+            const pid = busFilter.slice(7);
+            const page = (studio?.customBusPages || []).find(p => p.id === pid);
+            if (!page) return sources;
+            const allow = new Set(page.sources || []);
+            return sources.filter(s => allow.has(s.id));
+        }
+        return sources;
+    }
+
+    function render() {
+        const body = document.getElementById("remBody");
+        if (!studio) return;
+        const savedTop = body.scrollTop;
+
+        const mes = studio.mixEffects || [];
+        if (activeME >= mes.length) activeME = 0;
+        const me = mes[activeME];
+        const pages = getBusPages();
+        if (!pages.some(p => p.id === busFilter)) busFilter = "all";
+
+        if (activeTab === "switch" && me) {
+            const filtered = filterSources(me.sources || []);
+            body.innerHTML = `
+                <div class="remote-subrow" style="justify-content:space-between;">
+                    ${mes.length > 1 ? `
+                        <div class="remote-subrow">
+                            ${mes.map(m => `<button class="remote-pill-btn ${m.index === activeME ? "active" : ""}" data-me="${m.index}">${m.name}</button>`).join("")}
+                        </div>
+                    ` : ""}
+                    <div class="remote-subrow">
+                        ${pages.map(p => `<button class="remote-pill-btn ${busFilter === p.id ? "active" : ""}" data-bfilter="${p.id}">${p.label}</button>`).join("")}
+                    </div>
+                </div>
+                <div class="take-bar">
+                    <button class="btn btn-pgm solid take-big" id="remCut">CUT</button>
+                    <button class="btn btn-amber solid take-big" id="remAuto">AUTO</button>
+                    <button class="btn ${me.ftb ? "btn-pgm solid" : ""} take-big" id="remFtb">FTB</button>
+                </div>
+                <span class="section-label">Program (PGM)</span>
+                <div class="touch-grid">
+                    ${filtered.map(s => `<button class="touch-btn ${me.program === s.id ? "pgm" : ""}" data-pgm="${s.id}"><span>${s.shortName}</span><small>${s.name}</small></button>`).join("")}
+                </div>
+                <span class="section-label">Preview (PVW)</span>
+                <div class="touch-grid">
+                    ${filtered.map(s => `<button class="touch-btn ${me.preview === s.id ? "pvw" : ""}" data-pvw="${s.id}"><span>${s.shortName}</span><small>${s.name}</small></button>`).join("")}
+                </div>
+            `;
+            body.querySelectorAll("[data-me]").forEach(b => b.addEventListener("click", () => { activeME = Number(b.dataset.me); render(); }));
+            body.querySelectorAll("[data-bfilter]").forEach(b => b.addEventListener("click", () => { busFilter = b.dataset.bfilter; render(); }));
+            body.querySelector("#remCut")?.addEventListener("click", () => sendAction({ type: "cut", me: activeME }));
+            body.querySelector("#remAuto")?.addEventListener("click", () => sendAction({ type: "auto", me: activeME }));
+            body.querySelector("#remFtb")?.addEventListener("click", () => sendAction({ type: "ftb", me: activeME }));
+            body.querySelectorAll("[data-pgm]").forEach(b => b.addEventListener("click", () => sendAction({ type: "setProgram", me: activeME, source: b.dataset.pgm })));
+            body.querySelectorAll("[data-pvw]").forEach(b => b.addEventListener("click", () => sendAction({ type: "setPreview", me: activeME, source: b.dataset.pvw })));
+        } else if (activeTab === "aux") {
+            const auxs = studio.auxOutputs || [];
+            const opts = studio.outputSources || [];
+            body.innerHTML = auxs.map(a => `
+                <div class="card" style="padding:14px; display:flex; flex-direction:column; gap:10px;">
+                    <div class="field-row" style="justify-content:space-between;">
+                        <strong style="font-size:15px;">AUX ${a.id} · ${a.label}</strong>
+                        <span class="badge cyan">${a.sourceName}</span>
+                    </div>
+                    <select data-aux="${a.id}" style="padding:12px; font-size:15px;">
+                        ${opts.map(o => `<option value="${o.id}" ${o.id === a.source ? "selected" : ""}>${o.shortName} — ${o.name}</option>`).join("")}
+                    </select>
+                </div>
+            `).join("") || `<div class="muted">No Aux outputs on this switcher profile.</div>`;
+            body.querySelectorAll("[data-aux]").forEach(s => s.addEventListener("change", (e) => sendAction({ type: "setAux", aux: Number(s.dataset.aux), source: e.target.value })));
+        } else if (activeTab === "dsk") {
+            body.innerHTML = (studio.dsks || []).map(d => `
+                <div class="card" style="padding:14px; display:flex; flex-direction:column; gap:10px;">
+                    <div class="field-row" style="justify-content:space-between;">
+                        <strong style="font-size:16px;">DSK ${d.id + 1}</strong>
+                        <span class="badge">${d.fillShort}</span>
+                    </div>
+                    <div class="take-bar">
+                        <button class="btn ${d.enabled ? "btn-pgm solid" : ""} take-big" data-dsk-air="${d.id}">ON AIR</button>
+                        <button class="btn btn-amber solid take-big" data-dsk-auto="${d.id}">AUTO</button>
+                        <button class="btn ${d.tie ? "btn-accent-soft" : ""} take-big" data-dsk-tie="${d.id}">TIE</button>
+                    </div>
+                </div>
+            `).join("");
+            body.querySelectorAll("[data-dsk-air]").forEach(b => b.addEventListener("click", () => sendAction({ type: "toggleDSK", dsk: Number(b.dataset.dskAir) })));
+            body.querySelectorAll("[data-dsk-auto]").forEach(b => b.addEventListener("click", () => sendAction({ type: "autoDSK", dsk: Number(b.dataset.dskAuto) })));
+            body.querySelectorAll("[data-dsk-tie]").forEach(b => b.addEventListener("click", () => sendAction({ type: "toggleDSKTie", dsk: Number(b.dataset.dskTie) })));
+        } else if (activeTab === "macros") {
+            const macs = studio.macros || [];
+            body.innerHTML = `<div class="touch-grid">${macs.map(m => `
+                <button class="touch-btn" data-mac="${m.index}">
+                    <span class="muted" style="font-size:11px;">#${m.index + 1}</span>
+                    <small style="font-size:13px; opacity:1;">${m.name}</small>
+                </button>
+            `).join("") || `<div class="muted">No macros created yet.</div>`}</div>`;
+            body.querySelectorAll("[data-mac]").forEach(b => b.addEventListener("click", () => sendAction({ type: "runMacro", index: Number(b.dataset.mac) })));
+        } else if (activeTab === "tally" && me) {
+            const isPgm = me.program === tallyWatchSrc;
+            const isPvw = !isPgm && me.preview === tallyWatchSrc;
+            const srcObj = me.sources.find(s => s.id === tallyWatchSrc) || { shortName: tallyWatchSrc, name: tallyWatchSrc };
+            body.innerHTML = `
+                <select id="selTallyCam" style="padding:12px; font-size:15px;">
+                    ${me.sources.map(s => `<option value="${s.id}" ${s.id === tallyWatchSrc ? "selected" : ""}>Watch: ${s.shortName} — ${s.name}</option>`).join("")}
+                </select>
+                <div class="tally-lamp ${isPgm ? "is-pgm" : (isPvw ? "is-pvw" : "")}">
+                    <div style="font-size:52px; font-weight:900; letter-spacing:0.06em;">${isPgm ? "ON AIR" : (isPvw ? "PREVIEW" : "STANDBY")}</div>
+                    <div style="font-size:22px; font-weight:700;">${srcObj.shortName} · ${srcObj.name}</div>
+                </div>
+            `;
+            body.querySelector("#selTallyCam")?.addEventListener("change", (e) => { tallyWatchSrc = e.target.value; render(); });
+        }
+
+        body.scrollTop = savedTop;
+    }
+
+    document.querySelectorAll("#remTabs [data-tab]").forEach(btn => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll("#remTabs [data-tab]").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            activeTab = btn.dataset.tab;
+            render();
+        });
+    });
+    document.getElementById("btnRemTheme").addEventListener("click", () => {
+        themeIdx = (themeIdx + 1) % THEMES.length;
+        document.documentElement.dataset.theme = THEMES[themeIdx];
+    });
+
+    connectWs();
+</script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+#!/bin/bash
+# =========================================================================
+# ATEM-PROG Native macOS App Bundle Launcher (Zero Terminal Window!)
+# =========================================================================
+set -e
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.nvm/versions/node/$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | tail -n 1)/bin:$PATH"
+
+APP_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+BRIDGE_DIR="$APP_DIR/bridge"
+LAUNCHER_URL="http://127.0.0.1:8993/launcher.html"
+
+if ! command -v node >/dev/null 2>&1; then
+    open "$APP_DIR/ATEM-PROG.html"
+    exit 0
+fi
+
+# First-time dependency install if copied fresh onto a Mac
+if [ ! -d "$BRIDGE_DIR/node_modules" ]; then
+    osascript -e 'display notification "Installing ATEM-PROG service dependencies (first run)..." with title "ATEM-PROG"' >/dev/null 2>&1 || true
+    (cd "$BRIDGE_DIR" && npm install >/tmp/atem-prog-npm.log 2>&1)
+fi
+
+# Start background Node service silently if not already listening on 8993
+if ! curl -sf --max-time 1 "http://127.0.0.1:8993/api/status" >/dev/null 2>&1; then
+    (cd "$BRIDGE_DIR" && nohup node server.js >/tmp/atem-prog-bridge.log 2>&1 &)
+    for i in $(seq 1 25); do
+        sleep 0.15
+        if curl -sf --max-time 1 "http://127.0.0.1:8993/api/status" >/dev/null 2>&1; then
+            break
+        fi
+    done
+fi
+
+# Open compact Companion-style Launcher window (Chrome / Edge / Brave --app, or Safari fallback)
+if [ -d "/Applications/Google Chrome.app" ]; then
+    open -na "Google Chrome" --args --app="$LAUNCHER_URL" --window-size=640,740
+elif [ -d "/Applications/Microsoft Edge.app" ]; then
+    open -na "Microsoft Edge" --args --app="$LAUNCHER_URL" --window-size=640,740
+elif [ -d "/Applications/Brave Browser.app" ]; then
+    open -na "Brave Browser" --args --app="$LAUNCHER_URL" --window-size=640,740
+else
+    open "$LAUNCHER_URL"
+fi
+exit 0

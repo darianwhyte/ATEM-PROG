@@ -1,0 +1,7 @@
+* text=auto
+*.command text eol=lf
+ATEM-PROG.app/Contents/MacOS/ATEM-PROG text eol=lf
+*.bat text eol=crlf
+*.ico binary
+*.icns binary
+*.png binary
