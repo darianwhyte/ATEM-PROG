@@ -1,4 +1,4 @@
-panel// =========================================================================
+// =========================================================================
 // VIEW 5: MEDIA — STILLS, VIDEO CLIPS, MEDIA PLAYERS & COLOR GENERATORS
 // (js/ui/view-media.js)
 // Enforces ATEM hardware Media Pool limits for both Stills & Video Clips

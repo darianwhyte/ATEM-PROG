@@ -182,7 +182,7 @@ const StateStorage = (() => {
                     kind: record.kind || (record.blob?.type?.startsWith("video/") ? "video" : "still"),
                     duration: record.duration || 0,
                     loop: record.loop !== false,
-                    playing: (record.kind === "video" || record.blob?.type?.startsWith("video/")),
+                    playing: false, // ATEM hardware behavior: restored clips boot cued at 0:00
                     posterUrl: record.posterUrl || null,
                     url,
                     nativeWidth: record.nativeWidth || 1920,
@@ -309,6 +309,298 @@ const StateStorage = (() => {
         }
     }
 
+    // =========================================================================
+    // PORTABLE SHOW FILE EXPORT / IMPORT (.atemprog.json)
+    // Bundles full ATEM-PROG state, custom Switcher layouts & saved presets,
+    // custom bus pages, SuperSource presets, and optional Media Pool stills
+    // + I/O thumbnails into a single transferable JSON show file.
+    // =========================================================================
+    const SHOW_FILE_FORMAT = "atem-prog-show";
+    const SHOW_FILE_SCHEMA_VERSION = 1;
+    const UI_PREF_KEYS = {
+        switcherLayout: "atem_prog_switcher_layout_v5",
+        switcherCustomLayout: "atem_prog_switcher_custom_v4",
+        switcherSavedPresets: "atem_prog_switcher_saved_presets_v1",
+        theme: "atem_prog_theme_v1"
+    };
+
+    function blobToDataUrl(blob) {
+        return new Promise((resolve, reject) => {
+            if (typeof FileReader === "undefined") return reject(new Error("FileReader unavailable"));
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ""));
+            reader.onerror = () => reject(reader.error || new Error("Blob read failed"));
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    function dataUrlToBlob(dataUrl) {
+        if (typeof Blob === "undefined" || typeof atob === "undefined") return null;
+        const match = String(dataUrl || "").match(/^data:([^;,]+)?(;base64)?,(.*)$/);
+        if (!match) return null;
+        const mime = match[1] || "application/octet-stream";
+        const isBase64 = !!match[2];
+        const raw = isBase64 ? atob(match[3]) : decodeURIComponent(match[3]);
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        return new Blob([bytes], { type: mime });
+    }
+
+    function captureUiPrefs() {
+        const prefs = {};
+        if (typeof localStorage === "undefined") return prefs;
+        Object.entries(UI_PREF_KEYS).forEach(([prop, key]) => {
+            try {
+                const raw = localStorage.getItem(key);
+                if (raw === null) return;
+                if (prop === "theme") {
+                    prefs[prop] = raw;
+                } else {
+                    prefs[prop] = JSON.parse(raw);
+                }
+            } catch {}
+        });
+        return prefs;
+    }
+
+    function applyUiPrefs(prefs) {
+        if (!prefs || typeof prefs !== "object" || typeof localStorage === "undefined") return;
+        Object.entries(UI_PREF_KEYS).forEach(([prop, key]) => {
+            try {
+                if (prefs[prop] === undefined || prefs[prop] === null) {
+                    localStorage.removeItem(key);
+                } else if (prop === "theme") {
+                    localStorage.setItem(key, String(prefs[prop]));
+                } else {
+                    localStorage.setItem(key, JSON.stringify(prefs[prop]));
+                }
+            } catch {}
+        });
+        if (typeof ViewSwitcher !== "undefined" && typeof ViewSwitcher.reloadFromStorage === "function") {
+            ViewSwitcher.reloadFromStorage();
+        }
+        if (prefs.theme && typeof document !== "undefined" && document.documentElement) {
+            document.documentElement.dataset.theme = String(prefs.theme);
+        }
+    }
+
+    async function exportShowFile({ includeMedia = true, maxAssetBytes = 25 * 1024 * 1024 } = {}) {
+        if (typeof HistoryManager === "undefined") {
+            throw new Error("HistoryManager is required to export show files.");
+        }
+
+        const compactState = JSON.parse(HistoryManager.captureCompactState());
+        const uiPrefs = captureUiPrefs();
+        const mediaAssets = [];
+        const thumbnails = [];
+        const skippedLargeMedia = [];
+
+        if (includeMedia) {
+            // 1. Collect Media Pool binary assets (IndexedDB first, fallback to live blob URLs)
+            const db = await openDB();
+            const idbRecords = new Map();
+            if (db) {
+                const allRecs = await new Promise((resolve) => {
+                    try {
+                        const tx = db.transaction(STORE_MEDIA, "readonly");
+                        const req = tx.objectStore(STORE_MEDIA).getAll();
+                        req.onsuccess = () => resolve(req.result || []);
+                        req.onerror = () => resolve([]);
+                    } catch { resolve([]); }
+                });
+                allRecs.forEach(r => { if (r && r.blob) idbRecords.set(r.id, r); });
+            }
+
+            for (const item of (state.media || [])) {
+                let blob = idbRecords.get(item.id)?.blob || null;
+                if (!blob && item.url && typeof fetch === "function") {
+                    try {
+                        const resp = await fetch(item.url);
+                        if (resp.ok) blob = await resp.blob();
+                    } catch {}
+                }
+                if (!blob) continue;
+                if (blob.size > maxAssetBytes) {
+                    skippedLargeMedia.push(item.name || `Slot ${item.id + 1}`);
+                    continue;
+                }
+                try {
+                    const dataUrl = await blobToDataUrl(blob);
+                    mediaAssets.push({
+                        id: item.id,
+                        name: item.name || `Asset_${item.id}`,
+                        kind: item.kind || (blob.type?.startsWith("video/") ? "video" : "still"),
+                        duration: item.duration || 0,
+                        loop: item.loop !== false,
+                        posterUrl: item.posterUrl || null,
+                        nativeWidth: item.nativeWidth || 1920,
+                        nativeHeight: item.nativeHeight || 1080,
+                        mimeType: blob.type || "image/png",
+                        dataUrl
+                    });
+                } catch {}
+            }
+
+            // 2. Collect Input & Output Thumbnails (data URLs)
+            Object.entries(state.inputs || {}).forEach(([id, data]) => {
+                if (data?.thumbnail && typeof data.thumbnail === "string") {
+                    thumbnails.push({ sourceType: SourceTypes.EXTERNAL, resourceId: Number(id), dataUrl: data.thumbnail });
+                }
+            });
+            Object.entries(state.outputs || {}).forEach(([id, data]) => {
+                if (data?.thumbnail && typeof data.thumbnail === "string") {
+                    thumbnails.push({ sourceType: SourceTypes.OUTPUT, resourceId: Number(id), dataUrl: data.thumbnail });
+                }
+            });
+        }
+
+        return {
+            format: SHOW_FILE_FORMAT,
+            schemaVersion: SHOW_FILE_SCHEMA_VERSION,
+            exportedAt: new Date().toISOString(),
+            projectName: state.projectName || "Untitled Show",
+            deviceProfile: state.deviceProfile || "ATEM Mini Pro",
+            state: compactState,
+            uiPrefs,
+            mediaAssets,
+            thumbnails,
+            meta: {
+                skippedLargeMedia
+            }
+        };
+    }
+
+    async function downloadShowFile(baseName = "", options = {}) {
+        const bundle = await exportShowFile(options);
+        const slug = String(baseName || bundle.projectName || "atem_show")
+            .replace(/[^a-z0-9_\-]+/gi, "_")
+            .replace(/^_+|_+$/g, "")
+            .toLowerCase() || "atem_show";
+        const json = JSON.stringify(bundle, null, 2);
+        const blob = new Blob([json], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${slug}.atemprog.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2500);
+        return {
+            ok: true,
+            bytes: blob.size,
+            mediaCount: bundle.mediaAssets.length,
+            thumbCount: bundle.thumbnails.length,
+            skippedLargeMedia: bundle.meta?.skippedLargeMedia || []
+        };
+    }
+
+    async function importShowFile(input) {
+        const parsed = typeof input === "string" ? JSON.parse(input) : input;
+        if (!parsed || typeof parsed !== "object" || parsed.format !== SHOW_FILE_FORMAT || !parsed.state || typeof parsed.state !== "object") {
+            throw new Error("Invalid ATEM-PROG show file (.atemprog.json).");
+        }
+        if (typeof HistoryManager === "undefined") {
+            throw new Error("HistoryManager is required to import show files.");
+        }
+
+        const prevStateJson = HistoryManager.captureCompactState();
+        const prevUiPrefs = captureUiPrefs();
+
+        try {
+            // 1. Apply core show state
+            HistoryManager.applyCompactState(JSON.stringify(parsed.state));
+            if (typeof buildSources === "function") buildSources();
+            if (typeof initialiseResources === "function") initialiseResources();
+
+            // 2. Apply Switcher layouts, saved presets & UI preferences
+            if (parsed.uiPrefs && typeof parsed.uiPrefs === "object") {
+                applyUiPrefs(parsed.uiPrefs);
+            }
+
+            // 3. Restore embedded Media Pool stills/clips if provided
+            let mediaCount = 0;
+            if (Array.isArray(parsed.mediaAssets)) {
+                (state.media || []).forEach(item => {
+                    if (item?.url?.startsWith("blob:")) {
+                        try { URL.revokeObjectURL(item.url); } catch {}
+                    }
+                });
+                state.media = [];
+                await clearMediaAssets();
+
+                for (const asset of parsed.mediaAssets) {
+                    if (!asset || typeof asset.dataUrl !== "string") continue;
+                    const blob = dataUrlToBlob(asset.dataUrl);
+                    const url = blob ? URL.createObjectURL(blob) : asset.dataUrl;
+                    const item = {
+                        id: Number.isInteger(asset.id) ? asset.id : mediaCount,
+                        name: asset.name || `Asset_${mediaCount + 1}`,
+                        kind: asset.kind === "video" ? "video" : "still",
+                        duration: Number(asset.duration) || 0,
+                        loop: asset.loop !== false,
+                        playing: false,
+                        posterUrl: asset.posterUrl || null,
+                        url,
+                        nativeWidth: Number(asset.nativeWidth) || 1920,
+                        nativeHeight: Number(asset.nativeHeight) || 1080,
+                        scaleX: (Number(asset.nativeWidth) || 1920) / (state.canvas?.width || 1920),
+                        scaleY: (Number(asset.nativeHeight) || 1080) / (state.canvas?.height || 1080)
+                    };
+                    state.media.push(item);
+                    if (blob) await saveMediaAsset(item, blob);
+                    mediaCount++;
+                }
+                state.media.sort((a, b) => a.id - b.id);
+            }
+
+            // 4. Restore embedded Input/Output Thumbnails if provided
+            let thumbCount = 0;
+            if (Array.isArray(parsed.thumbnails)) {
+                for (const rec of parsed.thumbnails) {
+                    if (!rec || typeof rec.dataUrl !== "string") continue;
+                    let target = null;
+                    if (rec.sourceType === SourceTypes.EXTERNAL) {
+                        state.inputs[rec.resourceId] ??= { label: "", thumbnail: null, notes: "" };
+                        target = state.inputs[rec.resourceId];
+                    } else if (rec.sourceType === SourceTypes.OUTPUT) {
+                        target = getOutputData(rec.resourceId);
+                    }
+                    if (!target) continue;
+                    target.thumbnail = rec.dataUrl;
+                    if (typeof Image !== "undefined") {
+                        const img = new Image();
+                        img.onload = () => { target.thumbnailImage = img; };
+                        img.src = rec.dataUrl;
+                    }
+                    await saveThumbnail(rec.sourceType, rec.resourceId, rec.dataUrl);
+                    thumbCount++;
+                }
+            }
+
+            if (typeof buildSources === "function") buildSources();
+            HistoryManager.reset(true);
+            saveNow();
+
+            return {
+                ok: true,
+                projectName: state.projectName || parsed.projectName || "Untitled Show",
+                deviceProfile: state.deviceProfile,
+                mediaCount,
+                thumbCount
+            };
+        } catch (err) {
+            // Rollback cleanly on error
+            try {
+                HistoryManager.applyCompactState(prevStateJson);
+                applyUiPrefs(prevUiPrefs);
+                if (typeof buildSources === "function") buildSources();
+                if (typeof initialiseResources === "function") initialiseResources();
+            } catch {}
+            throw err;
+        }
+    }
+
     function init() {
         if (typeof SwitcherEngine !== "undefined") {
             const SKIP_SAVE_REASONS = new Set(["transitionAutoFrame", "dskAutoFrame", "transitionAutoStart", "dskAutoStart", "ftbStart"]);
@@ -338,6 +630,9 @@ const StateStorage = (() => {
         deleteThumbnail: (sourceType, resourceId) => saveThumbnail(sourceType, resourceId, null),
         clearSavedState,
         getSavedConfigBytes,
+        exportShowFile,
+        downloadShowFile,
+        importShowFile,
         setEnabled(flag) { _enabled = !!flag; },
         get isEnabled() { return _enabled; }
     };

@@ -366,10 +366,27 @@ const OverlaysUI = (() => {
                         </div>
 
                         <div style="padding-top:12px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:8px;">
+                            <div class="field-row" style="justify-content:space-between; flex-wrap:wrap;">
+                                <span class="section-label">ATEM-PROG Portable Show File (.atemprog.json)</span>
+                                <label class="check-row" style="font-size:11px; color:var(--text-muted);" title="Embed Media Pool stills & thumbnails inside the show file">
+                                    <input type="checkbox" id="chkPrjIncludeMedia" checked> Include Stills & Thumbs
+                                </label>
+                            </div>
+                            <div class="muted" style="font-size:11px;">
+                                Transfers your entire show between laptops — including Switcher custom layouts, saved presets, custom bus pages, SuperSource presets, macros & routing.
+                            </div>
+                            <div class="field-row">
+                                <button class="btn btn-accent-soft" id="btnPrjLoadShow" style="flex:1;">📂 Load Show File</button>
+                                <button class="btn btn-primary" id="btnPrjSaveShow" style="flex:1;">💾 Save Show File</button>
+                            </div>
+                            <input type="file" id="inpPrjShowFile" accept=".json,.atemprog.json" style="display:none;">
+                        </div>
+
+                        <div style="padding-top:12px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:8px;">
                             <span class="section-label">Blackmagic XML & Engineering Deliverables</span>
                             <div class="field-row">
                                 <button class="btn" id="btnPrjImport" style="flex:1;">⬆ Import XML / ZIP</button>
-                                <button class="btn btn-primary" id="btnPrjExport" style="flex:1;">⬇ Export ATEM XML</button>
+                                <button class="btn" id="btnPrjExport" style="flex:1;">⬇ Export ATEM XML</button>
                             </div>
                             <div class="field-row">
                                 <button class="btn" id="btnPrjPatchHtml" style="flex:1;">🖨 Printable Patch Sheet</button>
@@ -417,6 +434,33 @@ const OverlaysUI = (() => {
             state.canvas.frameRate = Number(e.target.value) || 60;
             StateStorage.scheduleSave();
             AppUI.refresh("videoMode");
+        });
+
+        const showFileIn = root.querySelector("#inpPrjShowFile");
+        root.querySelector("#btnPrjSaveShow")?.addEventListener("click", async () => {
+            try {
+                const includeMedia = !!root.querySelector("#chkPrjIncludeMedia")?.checked;
+                const res = await StateStorage.downloadShowFile(state.projectName || "atem_show", { includeMedia });
+                const kb = Math.max(1, Math.round(res.bytes / 1024));
+                const extra = res.skippedLargeMedia?.length ? ` (skipped ${res.skippedLargeMedia.length} large video clip${res.skippedLargeMedia.length === 1 ? "" : "s"})` : "";
+                AppUI.toast(`Saved Show File (${kb} KB, ${res.mediaCount} media)${extra}`, "ok");
+            } catch (err) {
+                AppUI.toast(`Save Show File failed: ${err.message}`, "err");
+            }
+        });
+        root.querySelector("#btnPrjLoadShow")?.addEventListener("click", () => showFileIn?.click());
+        showFileIn?.addEventListener("change", async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            try {
+                const text = await file.text();
+                const res = await StateStorage.importShowFile(text);
+                close();
+                AppUI.toast(`Loaded "${res.projectName}" (${res.deviceProfile})`, "ok");
+                AppUI.navigate("switcher");
+            } catch (err) {
+                AppUI.toast(`Load Show File failed: ${err.message}`, "err");
+            }
         });
 
         root.querySelector("#btnPrjImport")?.addEventListener("click", () => openImportModal());

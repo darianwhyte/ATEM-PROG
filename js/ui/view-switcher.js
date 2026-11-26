@@ -2381,6 +2381,17 @@ const ViewSwitcher = (() => {
         restoreSwitcherScrolls(container, scrollSnap);
     }
 
+    function reloadFromStorage() {
+        switcherTabMode = "me";
+        showLayoutMenu = false;
+        editingPageState = null;
+        openMultiTransConfig = new Set();
+        destPreviewSources = {};
+        meLayout = loadSavedLayout(LAYOUT_KEY, DEFAULT_ME_LAYOUT);
+        customLayout = loadSavedLayout(CUSTOM_LAYOUT_KEY, buildDefaultCustomLayout());
+        savedPresets = loadSavedPresets();
+    }
+
     return {
         render,
         renderCanvases,
@@ -2395,6 +2406,7 @@ const ViewSwitcher = (() => {
         executeGangAction,
         saveCurrentLayoutAsPreset,
         applySavedPreset,
-        deleteSavedPreset
+        deleteSavedPreset,
+        reloadFromStorage
     };
 })();

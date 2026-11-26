@@ -517,23 +517,49 @@ const AtemBridge = (() => {
     }
 
     let _pubTimer = null;
+    function mapSourceList(list) {
+        return (list || []).map(s => ({
+            id: s.id,
+            type: s.type,
+            shortName: getSourceShortName(s.id),
+            name: getSourceDisplayName(s.id)
+        }));
+    }
+
     function buildStudioSummary() {
         const profile = getProfile() || {};
+        const maxUsk = typeof getUpstreamKeyersPerME === "function"
+            ? getUpstreamKeyersPerME(profile)
+            : Math.max(0, Number(profile.keyers) || 0);
         const meList = state.workspaces
             .filter(w => w.type === "me" && isWorkspaceAvailable(w))
-            .map(w => ({
-                index: w.resourceId,
-                name: w.name,
-                program: w.data.source || "",
-                preview: w.data.previewSource || "",
-                ftb: !!w.data.ftb?.enabled,
-                sources: getSourcesForDestination("me", w).map(s => ({
-                    id: s.id,
-                    type: s.type,
-                    shortName: getSourceShortName(s.id),
-                    name: getSourceDisplayName(s.id)
-                }))
-            }));
+            .map(w => {
+                const nt = w.data.nextTransition || { bkgd: true, usk: [] };
+                const usks = (w.data.usk || []).slice(0, maxUsk).map((u, idx) => ({
+                    index: idx,
+                    enabled: !!u.enabled,
+                    source: u.source || "",
+                    shortName: getSourceShortName(u.source || ""),
+                    name: getSourceDisplayName(u.source || "")
+                }));
+                return {
+                    index: w.resourceId,
+                    name: w.name,
+                    program: w.data.source || "",
+                    preview: w.data.previewSource || "",
+                    ftb: !!w.data.ftb?.enabled,
+                    transitionStyle: w.data.transitionStyle || "Mix",
+                    transitionRate: Number(w.data.transitionRate) || 25,
+                    previewTransition: !!w.data.previewTransition,
+                    nextTransition: {
+                        bkgd: nt.bkgd !== false,
+                        usk: (nt.usk || []).slice(0, maxUsk).map(Boolean)
+                    },
+                    usks,
+                    sources: mapSourceList(getSourcesForDestination("me", w)),
+                    uskSources: mapSourceList(getSourcesForDestination("usk", w))
+                };
+            });
         const auxList = [];
         for (let a = 1; a <= (profile.assignableOutputs || 0); a++) {
             const out = getOutputData(a);
@@ -541,6 +567,7 @@ const AtemBridge = (() => {
                 id: a,
                 label: out.label || `AUX ${a}`,
                 source: out.source || "",
+                shortName: getSourceShortName(out.source || ""),
                 sourceName: getSourceDisplayName(out.source || "")
             });
         }
@@ -548,22 +575,97 @@ const AtemBridge = (() => {
             id: d.id,
             enabled: !!d.enabled,
             tie: !!d.tie,
-            fillShort: getSourceShortName(d.source || "")
+            rate: Number(d.rate) || 25,
+            source: d.source || "",
+            fillShort: getSourceShortName(d.source || ""),
+            fillName: getSourceDisplayName(d.source || "")
         }));
-        const macros = (state.macros || []).map((m, i) => m ? { index: i, name: m.name } : null).filter(Boolean).slice(0, 30);
-        const outputSources = getSourcesForDestination("output").map(s => ({
-            id: s.id,
-            shortName: getSourceShortName(s.id),
-            name: getSourceDisplayName(s.id)
-        }));
+        const dskSources = mapSourceList(getSourcesForDestination("dsk"));
+
+        const ssList = (profile.superSource || 0) > 0
+            ? state.workspaces
+                .filter(w => w.type === "superSource" && isWorkspaceAvailable(w))
+                .map(w => ({
+                    index: w.resourceId,
+                    name: w.name || `SuperSource ${w.resourceId + 1}`,
+                    artSource: w.data.artSource || "",
+                    artShort: getSourceShortName(w.data.artSource || ""),
+                    artName: getSourceDisplayName(w.data.artSource || ""),
+                    artPlace: w.data.artPlace || "Background",
+                    boxes: (w.data.boxes || []).slice(0, 4).map((b, idx) => ({
+                        index: idx,
+                        enabled: !!b.enabled,
+                        source: b.source || "",
+                        shortName: getSourceShortName(b.source || ""),
+                        name: getSourceDisplayName(b.source || "")
+                    })),
+                    boxSources: mapSourceList(getSourcesForDestination("superSourceBox", w)),
+                    artSources: mapSourceList(getSourcesForDestination("superSourceArt", w))
+                }))
+            : [];
+
+        const ssPresets = ((profile.superSource || 0) > 0 && typeof ShowTemplates !== "undefined" && typeof ShowTemplates.getAllSSPresets === "function")
+            ? ShowTemplates.getAllSSPresets().map(p => ({
+                id: p.id,
+                name: p.name,
+                builtIn: !!p.builtIn,
+                boxes: (p.boxes || []).slice(0, 4).map(b => ({
+                    enabled: !!b?.enabled,
+                    x: Number(b?.x || 0),
+                    y: Number(b?.y || 0),
+                    size: Number(b?.size || 0.4),
+                    cropEnabled: !!b?.cropEnabled,
+                    cropLeft: Number(b?.cropLeft || 0),
+                    cropRight: Number(b?.cropRight || 0),
+                    cropTop: Number(b?.cropTop || 0),
+                    cropBottom: Number(b?.cropBottom || 0)
+                }))
+            }))
+            : [];
+
+        const macros = (state.macros || []).map((m, i) => {
+            if (!m) return null;
+            const impact = typeof MacroEngine !== "undefined" && typeof MacroEngine.classifyMacroImpact === "function"
+                ? MacroEngine.classifyMacroImpact(m)
+                : { kind: "live", icon: "●", shortLabel: "LIVE", badgeClass: "red" };
+            return {
+                index: i,
+                name: m.name || `Macro ${i + 1}`,
+                hotkey: m.hotkey || "",
+                stepCount: Array.isArray(m.ops) ? m.ops.length : 0,
+                impact: {
+                    kind: impact.kind,
+                    icon: impact.icon,
+                    shortLabel: impact.shortLabel,
+                    badgeClass: impact.badgeClass
+                }
+            };
+        }).filter(Boolean);
+
+        const activeClips = (typeof CanvasRenderer !== "undefined" && typeof CanvasRenderer.getActiveMediaPlayerClips === "function")
+            ? CanvasRenderer.getActiveMediaPlayerClips().map(c => ({
+                mpNum: c.mpNum,
+                mediaId: c.item.id,
+                name: c.item.name || `Clip ${c.mpNum}`,
+                playing: c.item.playing === true,
+                isLive: !!c.isLive
+            }))
+            : [];
+
+        const outputSources = mapSourceList(getSourcesForDestination("output"));
         return {
             projectName: state.projectName || "Untitled Show",
             deviceProfile: state.deviceProfile,
+            supportsBusMapping: typeof supportsBusMapping === "function" ? supportsBusMapping(profile) : false,
             mixEffects: meList,
             auxOutputs: auxList,
             outputSources,
             dsks: dskList,
+            dskSources,
+            superSources: ssList,
+            ssPresets,
             macros,
+            activeClips,
             customBusPages: Array.isArray(state.customBusPages) ? state.customBusPages : []
         };
     }
@@ -583,7 +685,26 @@ const AtemBridge = (() => {
         else if (a.type === "cut") SwitcherEngine.performTransitionCut(a.me ?? 0, { record: true, emit: true });
         else if (a.type === "auto") SwitcherEngine.performTransitionAuto(a.me ?? 0);
         else if (a.type === "ftb") SwitcherEngine.performFTB(a.me ?? 0);
-        else if (a.type === "setAux") SwitcherEngine.setAuxSource(a.aux ?? 1, a.source ?? "");
+        else if (a.type === "setTransitionStyle") {
+            const style = ["Mix", "Dip", "Wipe", "DVE"].includes(a.style) ? a.style : "Mix";
+            SwitcherEngine.setTransitionStyle(a.me ?? 0, style);
+        } else if (a.type === "setTransitionRate") {
+            SwitcherEngine.setTransitionRate(a.me ?? 0, Number(a.rate) || 25);
+        } else if (a.type === "togglePrevTrans") {
+            const meWs = state.workspaces.find(w => w.type === "me" && w.resourceId === (Number(a.me) || 0));
+            if (meWs) SwitcherEngine.setPreviewTransition(meWs.resourceId, !meWs.data.previewTransition);
+        } else if (a.type === "toggleNextTrans") {
+            if (a.target === "bkgd") SwitcherEngine.toggleNextTransitionBkgd(a.me ?? 0);
+            else SwitcherEngine.toggleNextTransitionKey(a.me ?? 0, Number(a.target) || 0);
+        } else if (a.type === "toggleUSK") {
+            const meWs = state.workspaces.find(w => w.type === "me" && w.resourceId === (Number(a.me) || 0));
+            const uskIdx = Number(a.usk) || 0;
+            const usk = meWs?.data?.usk?.[uskIdx];
+            if (meWs && usk) SwitcherEngine.setLayerEnabled(meWs, uskIdx, !usk.enabled, "usk");
+        } else if (a.type === "setUSKSource") {
+            const meWs = state.workspaces.find(w => w.type === "me" && w.resourceId === (Number(a.me) || 0));
+            if (meWs) SwitcherEngine.setLayerSource(meWs, Number(a.usk) || 0, a.source ?? "", "usk");
+        } else if (a.type === "setAux") SwitcherEngine.setAuxSource(a.aux ?? 1, a.source ?? "");
         else if (a.type === "toggleDSK") {
             const dsk = getDSK(a.dsk ?? 0);
             if (dsk) SwitcherEngine.setDSKEnabled(dsk.id, !dsk.enabled);
@@ -591,6 +712,52 @@ const AtemBridge = (() => {
         else if (a.type === "toggleDSKTie") {
             const dsk = getDSK(a.dsk ?? 0);
             if (dsk) SwitcherEngine.setDSKTie(dsk.id, !dsk.tie);
+        } else if (a.type === "setDSKSource") {
+            SwitcherEngine.setDSKFill(a.dsk ?? 0, a.source ?? "");
+        } else if (a.type === "setSSBoxEnabled") {
+            const ssWs = state.workspaces.find(w => w.type === "superSource" && w.resourceId === (Number(a.ss) || 0));
+            const boxIdx = Number(a.box) || 0;
+            const box = ssWs?.data?.boxes?.[boxIdx];
+            if (ssWs && box) {
+                const next = a.enabled !== undefined ? !!a.enabled : !box.enabled;
+                SwitcherEngine.setLayerEnabled(ssWs, boxIdx, next, "box");
+            }
+        } else if (a.type === "setSSBoxSource") {
+            const ssWs = state.workspaces.find(w => w.type === "superSource" && w.resourceId === (Number(a.ss) || 0));
+            if (ssWs) SwitcherEngine.setLayerSource(ssWs, Number(a.box) || 0, a.source ?? "", "box");
+        } else if (a.type === "setSSArtSource") {
+            SwitcherEngine.setSuperSourceArt(a.ss ?? 0, { artSource: a.source ?? "" });
+        } else if (a.type === "applySSPreset" && typeof ShowTemplates !== "undefined") {
+            const ssWs = state.workspaces.find(w => w.type === "superSource" && w.resourceId === (Number(a.ss) || 0));
+            const preset = ShowTemplates.getAllSSPresets().find(p => p.id === a.presetId);
+            if (ssWs && preset) ShowTemplates.applySSPreset(ssWs, preset);
+        } else if (a.type === "gangAction") {
+            const targets = Array.isArray(a.targets) ? a.targets : [];
+            const mode = a.mode || "cut";
+            const auxPreviewMap = (a.auxPreviewMap && typeof a.auxPreviewMap === "object") ? a.auxPreviewMap : {};
+            targets.forEach(t => {
+                if (typeof t !== "string") return;
+                const meMatch = t.match(/^me:(\d+)$/);
+                if (meMatch) {
+                    const meIdx = Number(meMatch[1]);
+                    if (mode === "cut") SwitcherEngine.performTransitionCut(meIdx, { record: true, emit: true });
+                    else if (mode === "auto") SwitcherEngine.performTransitionAuto(meIdx);
+                    else if (mode === "ftb") SwitcherEngine.performFTB(meIdx);
+                    return;
+                }
+                const auxMatch = t.match(/^aux:(\d+)$/);
+                if (auxMatch && (mode === "cut" || mode === "auto")) {
+                    const auxNum = Number(auxMatch[1]);
+                    if (auxPreviewMap[t] !== undefined) {
+                        SwitcherEngine.setAuxSource(auxNum, auxPreviewMap[t]);
+                    }
+                }
+            });
+        } else if (a.type === "controlMediaClip" && typeof CanvasRenderer !== "undefined") {
+            if (typeof CanvasRenderer.controlMediaClip === "function") {
+                CanvasRenderer.controlMediaClip(a.mediaId, a.action || "toggle");
+                schedulePublishStudioState();
+            }
         } else if (a.type === "runMacro" && typeof MacroPlayer !== "undefined") {
             MacroPlayer.playMacro(Number(a.index) || 0, { mode: "live", speed: 1 });
         }
@@ -684,6 +851,8 @@ const AtemBridge = (() => {
         setLiveSync,
         captureStillToInput,
         pullStillToMediaPool,
+        buildStudioSummary,
+        handleIncomingRemoteAction,
         publishStudioStateNow: schedulePublishStudioState,
         getStatus,
         subscribe

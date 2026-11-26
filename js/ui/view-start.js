@@ -146,13 +146,17 @@ const ViewStart = (() => {
                             </div>
 
                             <div class="card">
-                                <div class="section-label" style="margin-bottom:8px;">2 · Import Existing ATEM Backup</div>
-                                <p class="muted" style="margin:0 0 12px; font-size:12px;">
-                                    Load an official Blackmagic ATEM <code>.xml</code> file, exported <code>.zip</code> package, or backup folder with Media Pool stills.
+                                <div class="section-label" style="margin-bottom:8px;">2 · Load Show File or ATEM Backup</div>
+                                <p class="muted" style="margin:0 0 10px; font-size:12px;">
+                                    Open a portable <code>.atemprog.json</code> show (with custom Switcher layouts & presets), or import a Blackmagic ATEM <code>.xml</code> / <code>.zip</code> backup.
                                 </p>
-                                <div class="field-row">
-                                    <button class="btn" id="btnWizardImportFile" style="flex:1;">Load XML / ZIP</button>
-                                    <button class="btn" id="btnWizardImportFolder" style="flex:1;">Load Folder</button>
+                                <div style="display:flex; flex-direction:column; gap:8px;">
+                                    <button class="btn btn-accent-soft" id="btnWizardLoadShowFile" style="width:100%;">📂 Load ATEM-PROG Show (.atemprog.json)</button>
+                                    <input type="file" id="inpWizardShowFile" accept=".json,.atemprog.json" style="display:none;">
+                                    <div class="field-row">
+                                        <button class="btn" id="btnWizardImportFile" style="flex:1;">Load XML / ZIP</button>
+                                        <button class="btn" id="btnWizardImportFolder" style="flex:1;">Load Folder</button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -271,6 +275,20 @@ const ViewStart = (() => {
         });
         container.querySelector("#btnWizardPushConfig")?.addEventListener("click", () => {
             OverlaysUI.openConnectionsDrawer("bridge");
+        });
+
+        const wizardShowIn = container.querySelector("#inpWizardShowFile");
+        container.querySelector("#btnWizardLoadShowFile")?.addEventListener("click", () => wizardShowIn?.click());
+        wizardShowIn?.addEventListener("change", async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            try {
+                const res = await StateStorage.importShowFile(await file.text());
+                AppUI.toast(`Loaded "${res.projectName}" (${res.deviceProfile})`, "ok");
+                AppUI.navigate("switcher");
+            } catch (err) {
+                AppUI.toast(`Load Show File failed: ${err.message}`, "err");
+            }
         });
 
         container.querySelector("#btnWizardImportFile")?.addEventListener("click", () => OverlaysUI.openImportModal("file"));

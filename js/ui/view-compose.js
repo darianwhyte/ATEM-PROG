@@ -24,6 +24,13 @@ const ViewCompose = (() => {
         inspectorTab = "source";
     }
 
+    function resetSelection() {
+        selectedWsId = null;
+        selectedTarget = { kind: "box", index: 0 };
+        inspectorTab = "source";
+        stageBusMode = "program";
+    }
+
     function getAvailableWorkspaces() {
         const ss = state.workspaces.filter(w => w.type === "superSource" && isWorkspaceAvailable(w));
         const mes = state.workspaces.filter(w => w.type === "me" && isWorkspaceAvailable(w));
@@ -773,7 +780,6 @@ const ViewCompose = (() => {
         container.innerHTML = `
             <div class="compose-view">
                 <div class="subbar">
-                    <div class="field-row" style="gap:10px;">
                     <div class="field-row" style="gap:10px; flex-wrap:wrap;">
                         <div class="seg">
                             ${wsList.map(w => `
@@ -1060,5 +1066,5 @@ const ViewCompose = (() => {
         });
     }
 
-    return { render, renderCanvas, syncLiveStageOverlays, focusDSK };
+    return { render, renderCanvas, syncLiveStageOverlays, focusDSK, resetSelection };
 })();

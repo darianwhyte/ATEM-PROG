@@ -853,6 +853,60 @@ const AtemTestSuite = (() => {
                         });
                         assertEqual(ssSnap.ops.length, 5, "Lean SS1 Box 1 snapshot emits exactly 5 ops (Source, X, Y, Size, Enable)");
                     }
+                },
+                {
+                    name: "Portable Show File (.atemprog.json) round-trips full state, custom Switcher layouts & saved presets with rollback safety",
+                    async fn() {
+                        resetFreshState("ATEM 2 M/E Constellation HD");
+                        state.projectName = "Touring Rig A";
+                        SwitcherEngine.setMEProgram(0, "input6");
+                        SwitcherEngine.setAuxSource(2, "input3");
+                        state.customBusPages = [{ id: "p_cams", name: "Cameras", sources: ["input1", "input2", "input3"] }];
+                        MacroEngine.createBlankMacro(0, "Opener");
+                        MacroEngine.insertPresetStep(0, -1, "mePreview", { meIndex: 0, source: "input4" });
+
+                        localStorage.setItem("atem_prog_switcher_custom_v4", JSON.stringify({
+                            locked: true,
+                            shortcutTargets: [],
+                            visible: { "me0:monitors": true, "me0:bus": true, multiTrans: true },
+                            multiTransTargets: { multiTrans: ["me:0", "me:1", "aux:1"] }
+                        }));
+                        localStorage.setItem("atem_prog_switcher_saved_presets_v1", JSON.stringify([
+                            { id: "lp_1", name: "Dual M/E Desk", mode: "custom", layout: { locked: true, buttonScale: "lg" } }
+                        ]));
+
+                        const bundle = await StateStorage.exportShowFile({ includeMedia: false });
+                        assertEqual(bundle.format, "atem-prog-show", "Show file format marker");
+                        assertEqual(bundle.projectName, "Touring Rig A");
+                        assertEqual(bundle.uiPrefs.switcherCustomLayout.multiTransTargets.multiTrans.length, 3, "Exported Multi-Trans targets");
+                        assertEqual(bundle.uiPrefs.switcherSavedPresets[0].name, "Dual M/E Desk", "Exported saved layout preset");
+
+                        // Wipe everything to a different model & clear localStorage UI prefs
+                        resetFreshState("ATEM Mini Pro");
+                        localStorage.removeItem("atem_prog_switcher_custom_v4");
+                        localStorage.removeItem("atem_prog_switcher_saved_presets_v1");
+
+                        // Verify invalid file is rejected without mutating state
+                        let rejected = false;
+                        try { await StateStorage.importShowFile(JSON.stringify({ format: "wrong" })); } catch { rejected = true; }
+                        assert(rejected, "Invalid show file rejected");
+                        assertEqual(state.deviceProfile, "ATEM Mini Pro", "State untouched after rejected import");
+
+                        // Import valid show bundle
+                        const res = await StateStorage.importShowFile(JSON.stringify(bundle));
+                        assertEqual(res.ok, true);
+                        assertEqual(state.projectName, "Touring Rig A", "Project name restored");
+                        assertEqual(state.deviceProfile, "ATEM 2 M/E Constellation HD", "Hardware profile restored");
+                        assertEqual(state.workspaces[0].data.source, "input6", "M/E 1 Program restored");
+                        assertEqual(getOutputData(2).source, "input3", "Aux 2 route restored");
+                        assertEqual(state.customBusPages[0].name, "Cameras", "Custom bus page restored");
+                        assertEqual(state.macros[0].name, "Opener", "Macro restored");
+
+                        const restoredCustom = JSON.parse(localStorage.getItem("atem_prog_switcher_custom_v4"));
+                        assertEqual(restoredCustom.shortcutTargets.length, 0, "Empty 0-shortcut custom config preserved");
+                        const restoredPresets = JSON.parse(localStorage.getItem("atem_prog_switcher_saved_presets_v1"));
+                        assertEqual(restoredPresets[0].name, "Dual M/E Desk", "Saved Switcher presets restored");
+                    }
                 }
             ]
         }

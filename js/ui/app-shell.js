@@ -1,4 +1,4 @@
- atem// =========================================================================
+// =========================================================================
 // ATEM-PROG v3 — APPLICATION SHELL & ROUTER (js/ui/app-shell.js)
 // Lean JS-first shell managing top navigation, view routing, keyboard
 // shortcuts, live canvas ticking, toasts, and unified engine sync.
