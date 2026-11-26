@@ -22,10 +22,11 @@ const SwitcherEngine = (() => {
         return () => _listeners.delete(listener);
     }
 
-    function notify(reason = "state", immediate = false) {
+    function notify(reason = "state", immediate = false, meta = null) {
+        const payload = meta ? { reason, immediate, ...meta } : { reason, immediate };
         _listeners.forEach(fn => {
             try {
-                fn({ reason, immediate });
+                fn(payload);
             } catch (err) {
                 console.error("SwitcherEngine subscriber error:", err);
             }
@@ -288,7 +289,7 @@ const SwitcherEngine = (() => {
             source: mapSource(sourceId)
         });
         if (!skipFollow) applyBusFollowers(ws.resourceId, "pgm");
-        notify("meProgram", false);
+        notify("meProgram", false, { me: ws.resourceId });
         return true;
     }
 
@@ -305,7 +306,7 @@ const SwitcherEngine = (() => {
             source: mapSource(sourceId)
         });
         if (!skipFollow) applyBusFollowers(ws.resourceId, "pvw");
-        notify("mePreview", false);
+        notify("mePreview", false, { me: ws.resourceId });
         return true;
     }
 
@@ -389,7 +390,7 @@ const SwitcherEngine = (() => {
 
         applyBusFollowers(meWorkspace.resourceId, "cut");
 
-        if (emit) notify("transitionCut", true);
+        if (emit) notify("transitionCut", true, { me: meWorkspace.resourceId });
         return true;
     }
 
@@ -408,6 +409,9 @@ const SwitcherEngine = (() => {
             });
             if (typeof MacroRecorder !== "undefined" && MacroRecorder.isRecording) {
                 MacroRecorder.addSleepFrames(totalFrames);
+            }
+            if (!ws.data.previewTransition) {
+                notify("transitionAutoStart", true, { me: ws.resourceId });
             }
 
             for (let f = 1; f <= totalFrames; f++) {
@@ -430,7 +434,7 @@ const SwitcherEngine = (() => {
             ws.data.transitionProgress = 0;
             applyBusFollowers(ws.resourceId, "autoProgress", { progress: 0 });
             _isAutoTransitioning = false;
-            notify("transitionAutoDone", true);
+            notify("transitionAutoDone", true, { me: ws.resourceId });
         }
     }
 
@@ -529,6 +533,7 @@ const SwitcherEngine = (() => {
         if (typeof MacroRecorder !== "undefined" && MacroRecorder.isRecording) {
             MacroRecorder.addSleepFrames(totalFrames);
         }
+        notify("ftbStart", true, { me: ws.resourceId });
 
         try {
             for (let f = 1; f <= totalFrames; f++) {
@@ -542,7 +547,7 @@ const SwitcherEngine = (() => {
             return true;
         } finally {
             _activeFtbTransitions.delete(ws.resourceId);
-            notify("ftbDone", true);
+            notify("ftbDone", true, { me: ws.resourceId });
         }
     }
 
@@ -687,7 +692,9 @@ const SwitcherEngine = (() => {
             }
         }
 
-        notify("layerEnabled", false);
+        notify("layerEnabled", false, ws.type === "me"
+            ? { me: ws.resourceId, usk: layerIdx }
+            : { ss: ws.resourceId, box: layerIdx });
         return true;
     }
 
@@ -733,7 +740,9 @@ const SwitcherEngine = (() => {
             });
         }
 
-        notify("layerSource", false);
+        notify("layerSource", false, ws.type === "me"
+            ? { me: ws.resourceId, usk: layerIdx }
+            : { ss: ws.resourceId, box: layerIdx });
         return true;
     }
 
@@ -984,7 +993,7 @@ const SwitcherEngine = (() => {
         if (!dsk) return false;
         dsk.enabled = !!enabled;
         logMacroAction({ id: "DownstreamKeyerOnAir", downstreamKeyerIndex: String(dsk.id), enabled: dsk.enabled ? "True" : "False" });
-        notify("dskEnabled", false);
+        notify("dskEnabled", false, { dsk: dsk.id });
         return true;
     }
 
@@ -993,7 +1002,7 @@ const SwitcherEngine = (() => {
         if (!dsk) return false;
         dsk.tie = !!tied;
         logMacroAction({ id: "DownstreamKeyerTie", downstreamKeyerIndex: String(dsk.id), tie: dsk.tie ? "True" : "False" });
-        notify("dskTie", false);
+        notify("dskTie", false, { dsk: dsk.id });
         return true;
     }
 
@@ -1044,6 +1053,7 @@ const SwitcherEngine = (() => {
             if (typeof MacroRecorder !== "undefined" && MacroRecorder.isRecording) {
                 MacroRecorder.addSleepFrames(totalFrames);
             }
+            notify("dskAutoStart", true, { dsk: dsk.id });
 
             for (let f = 1; f <= totalFrames; f++) {
                 dsk.transitionProgress = f / totalFrames;
@@ -1056,7 +1066,7 @@ const SwitcherEngine = (() => {
         } finally {
             dsk.transitionProgress = 0;
             _activeDskAutoTransitions.delete(dsk.id);
-            notify("dskAutoDone", true);
+            notify("dskAutoDone", true, { dsk: dsk.id });
         }
     }
 
@@ -1086,7 +1096,7 @@ const SwitcherEngine = (() => {
             auxiliaryIndex: String(numId - 1),
             source: mapSource(sourceId)
         });
-        notify("auxSource", false);
+        notify("auxSource", false, { aux: numId });
         return true;
     }
 
@@ -1336,7 +1346,7 @@ const SwitcherEngine = (() => {
         const host = getCropHost(ws, idx, group);
         if (!host) return false;
         host.cropEnabled = !!enabled;
-        notify("layerCrop", true);
+        notify("layerCropToggle", true);
         return true;
     }
 
@@ -1344,7 +1354,7 @@ const SwitcherEngine = (() => {
         const host = getCropHost(ws, idx, group);
         if (!host) return false;
         host.borderEnabled = !!enabled;
-        notify("borderWidth", true);
+        notify("layerBorderToggle", true);
         return true;
     }
 
@@ -1368,7 +1378,7 @@ const SwitcherEngine = (() => {
         const layer = getLayerFromWorkspace(ws, idx, group);
         if (!layer) return false;
         layer.maskEnabled = !!enabled;
-        notify("layerMask", true);
+        notify("layerMaskToggle", true);
         return true;
     }
 
@@ -1413,7 +1423,7 @@ const SwitcherEngine = (() => {
         const dsk = getDSK(dskIdx);
         if (!dsk) return false;
         dsk.maskEnabled = !!val;
-        notify("dskMask", true);
+        notify("dskMaskToggle", true);
         return true;
     }
 

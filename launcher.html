@@ -72,6 +72,14 @@
             <span class="section-label">Quick Open</span>
             <span class="badge" id="clientsBadge">0 Connected Devices</span>
         </div>
+        <div class="field-row" style="gap:10px;">
+            <label for="selStartupMode" class="muted" style="font-size:12px; white-space:nowrap;">Startup Mode</label>
+            <select id="selStartupMode" style="flex:1; padding:6px 8px; font-size:12px;">
+                <option value="resume">Resume Show (if saved)</option>
+                <option value="wizard">Start &amp; Setup Wizard</option>
+                <option value="blank">New Blank Show</option>
+            </select>
+        </div>
         <div class="field-row" style="flex-wrap:wrap;">
             <button class="btn" id="btnOpenRemote" style="flex:1;">📱 Touch Remote (Tablet / Phone)</button>
             <button class="btn" id="btnOpenTests">🧪 Engine Tests</button>
@@ -115,8 +123,18 @@
 </div>
 
 <script>
-    const ws = new WebSocket(`ws://${location.host}`);
+    const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${wsProto}//${location.host}`);
     let statusData = null;
+
+    function esc(val) {
+        return String(val ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+    }
 
     function fmtUptime(sec) {
         const m = Math.floor(sec / 60);
@@ -154,25 +172,28 @@
             const listEl = document.getElementById("lanUrlList");
             const lan = data.urls?.lan || [];
             if (lan.length === 0) {
-                listEl.innerHTML = `<div class="url-row"><span class="mono">${data.urls.local}</span><button class="btn btn-xs" onclick="copyText('${data.urls.local}', this)">Copy</button></div>`;
+                listEl.innerHTML = `<div class="url-row"><span class="mono">${esc(data.urls.local)}</span><button class="btn btn-xs" data-copy-url="${esc(data.urls.local)}">Copy</button></div>`;
             } else {
                 listEl.innerHTML = lan.map(item => `
                     <div class="url-row">
                         <div style="min-width:0;">
-                            <div style="font-size:11px; color:var(--text-muted);">${item.iface} · Full Studio UI</div>
-                            <div class="mono" style="font-size:12px;">${item.studio}</div>
+                            <div style="font-size:11px; color:var(--text-muted);">${esc(item.iface)} · Full Studio UI</div>
+                            <div class="mono" style="font-size:12px;">${esc(item.studio)}</div>
                         </div>
-                        <button class="btn btn-xs" onclick="copyText('${item.studio}', this)">Copy</button>
+                        <button class="btn btn-xs" data-copy-url="${esc(item.studio)}">Copy</button>
                     </div>
                     <div class="url-row">
                         <div style="min-width:0;">
-                            <div style="font-size:11px; color:var(--accent-text);">${item.iface} · iPad / Phone Touch Remote</div>
-                            <div class="mono" style="font-size:12px;">${item.remote}</div>
+                            <div style="font-size:11px; color:var(--accent-text);">${esc(item.iface)} · iPad / Phone Touch Remote</div>
+                            <div class="mono" style="font-size:12px;">${esc(item.remote)}</div>
                         </div>
-                        <button class="btn btn-xs btn-accent-soft" onclick="copyText('${item.remote}', this)">Copy</button>
+                        <button class="btn btn-xs btn-accent-soft" data-copy-url="${esc(item.remote)}">Copy</button>
                     </div>
                 `).join("");
             }
+            listEl.querySelectorAll("[data-copy-url]").forEach(btn => {
+                btn.addEventListener("click", () => copyText(btn.dataset.copyUrl, btn));
+            });
 
             const logBox = document.getElementById("logBox");
             logBox.textContent = (data.logs || []).join("\n") || "Service ready.";
@@ -194,10 +215,13 @@
                 } else {
                     box.innerHTML = msg.devices.map(d => `
                         <div class="url-row">
-                            <span><strong>${d.name}</strong> <span class="mono muted">${d.ip}</span></span>
-                            <button class="btn btn-xs btn-primary" onclick="connectIp('${d.ip}')">Connect</button>
+                            <span><strong>${esc(d.name)}</strong> <span class="mono muted">${esc(d.ip)}</span></span>
+                            <button class="btn btn-xs btn-primary" data-connect-ip="${esc(d.ip)}">Connect</button>
                         </div>
                     `).join("");
+                    box.querySelectorAll("[data-connect-ip]").forEach(btn => {
+                        btn.addEventListener("click", () => connectIp(btn.dataset.connectIp));
+                    });
                 }
             }
         } catch {}
@@ -208,7 +232,44 @@
         if (ws.readyState === 1) ws.send(JSON.stringify({ cmd: "connect", ip }));
     }
 
-    document.getElementById("btnLaunchWeb").addEventListener("click", () => window.open("/", "_blank"));
+    const STARTUP_KEY = "atem_prog_launcher_startup_v1";
+    const selStartupMode = document.getElementById("selStartupMode");
+
+    function initStartupDropdown() {
+        let savedName = "";
+        try {
+            const raw = localStorage.getItem("atem_prog_state_v1");
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                savedName = parsed?.projectName || "Saved Show";
+            }
+        } catch {}
+
+        const resumeOpt = selStartupMode.querySelector('option[value="resume"]');
+        if (resumeOpt) {
+            resumeOpt.textContent = savedName
+                ? `Resume Show — ${savedName}`
+                : "Resume Show (no saved show → Wizard)";
+        }
+
+        try {
+            const savedMode = localStorage.getItem(STARTUP_KEY);
+            if (["resume", "wizard", "blank"].includes(savedMode)) {
+                selStartupMode.value = savedMode;
+            }
+        } catch {}
+
+        selStartupMode.addEventListener("change", () => {
+            try { localStorage.setItem(STARTUP_KEY, selStartupMode.value); } catch {}
+        });
+    }
+
+    initStartupDropdown();
+
+    document.getElementById("btnLaunchWeb").addEventListener("click", () => {
+        const mode = selStartupMode?.value || "resume";
+        window.open(`/?startup=${encodeURIComponent(mode)}`, "_blank");
+    });
     document.getElementById("btnOpenRemote").addEventListener("click", () => window.open("/remote.html", "_blank"));
     document.getElementById("btnOpenTests").addEventListener("click", () => window.open("/tests.html", "_blank"));
     document.getElementById("btnScanLan").addEventListener("click", () => {

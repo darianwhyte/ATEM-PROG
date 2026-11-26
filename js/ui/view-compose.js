@@ -128,14 +128,31 @@ const ViewCompose = (() => {
         }
 
         // Live-update numeric slider readout labels in place
+        // Live-update numeric slider readout labels AND paired linked range thumbs in place
         const setRo = (id, text) => {
             const sp = document.querySelector(`[data-ro="${id}"]`);
             if (sp) sp.textContent = text;
+        };
+        const syncRange = (selector, val) => {
+            const inp = document.querySelector(selector);
+            if (inp && document.activeElement !== inp) inp.value = String(val);
         };
         if (layer) {
             if (layer.x !== undefined) setRo("posX", Number(layer.x || 0).toFixed(2));
             if (layer.y !== undefined) setRo("posY", Number(layer.y || 0).toFixed(2));
             if (layer.size !== undefined) setRo("scale", `${Math.round((layer.size ?? 0.5) * 100)}%`);
+            if (layer.x !== undefined) {
+                setRo("posX", Number(layer.x || 0).toFixed(2));
+                syncRange("#cmpPosX", layer.x ?? 0);
+            }
+            if (layer.y !== undefined) {
+                setRo("posY", Number(layer.y || 0).toFixed(2));
+                syncRange("#cmpPosY", layer.y ?? 0);
+            }
+            if (layer.size !== undefined) {
+                setRo("scale", `${Math.round((layer.size ?? 0.5) * 100)}%`);
+                syncRange("#cmpScale", layer.size ?? 0.5);
+            }
             const ks = layer.keySettings || {};
             if (ks.luma) { setRo("lumaClip", `${ks.luma.clip ?? 50}%`); setRo("lumaGain", `${ks.luma.gain ?? 50}%`); }
             if (ks.linear) { setRo("linClip", `${ks.linear.clip ?? 50}%`); setRo("linGain", `${ks.linear.gain ?? 50}%`); }
@@ -144,13 +161,25 @@ const ViewCompose = (() => {
             const cropHost = ws.type === "superSource" ? layer : (layer.dveId !== null ? state.resources.dves.find(d => d.id === layer.dveId) : null);
             if (cropHost) {
                 ["cropLeft", "cropRight", "cropTop", "cropBottom"].forEach(k => setRo(k, String(cropHost[k] || 0)));
+                ["cropLeft", "cropRight", "cropTop", "cropBottom"].forEach(k => {
+                    setRo(k, String(cropHost[k] || 0));
+                    syncRange(`[data-crop-edge="${k}"]`, cropHost[k] || 0);
+                });
                 setRo("borderW", `${cropHost.borderWidth || 2}px`);
             }
             ["maskLeft", "maskRight", "maskTop", "maskBottom"].forEach(k => setRo(k, String(layer[k] || 0)));
+            ["maskLeft", "maskRight", "maskTop", "maskBottom"].forEach(k => {
+                setRo(k, String(layer[k] || 0));
+                syncRange(`[data-mask-edge="${k}"]`, layer[k] || 0);
+            });
             if (selectedTarget.kind === "dsk") {
                 setRo("dskClip", `${ks.linear?.clip ?? 50}%`);
                 setRo("dskGain", `${ks.linear?.gain ?? 50}%`);
                 ["maskLeft", "maskRight", "maskTop", "maskBottom"].forEach(k => setRo(`dsk_${k}`, String(layer[k] || 0)));
+                ["maskLeft", "maskRight", "maskTop", "maskBottom"].forEach(k => {
+                    setRo(`dsk_${k}`, String(layer[k] || 0));
+                    syncRange(`[data-dsk-mask="${k}"]`, layer[k] || 0);
+                });
             }
         }
         if (ws.type === "superSource") {
@@ -304,11 +333,9 @@ const ViewCompose = (() => {
                 if (!showThis) return;
                 const hasDve = u.keyType === "dve" || u.flyingKey;
                 const rect = hasDve ? atemToCanvas(u) : { left: 0, top: 0, width: 100, height: 100 };
-                const offAirTag = !visibleLive ? " · OFF AIR PREVIEW" : "";
                 items.push(`
                     <div class="stage-box ${isSel ? "selected" : ""} ${!visibleLive ? "off-air-preview" : ""} ${!hasDve ? "fullscreen-key" : ""}" data-drag-kind="usk" data-drag-idx="${idx}"
                          style="left:${rect.left}%; top:${rect.top}%; width:${rect.width}%; height:${rect.height}%; ${hasDve ? "" : "cursor:pointer;"}">
-                        <span class="stage-box-tag">USK ${idx + 1} (${esc((u.keyType || "luma").toUpperCase())}) · ${esc(getSourceShortName(u.source))}${offAirTag}</span>
                         ${isSel && hasDve ? `<div class="stage-resize-handle" data-resize-kind="usk" data-resize-idx="${idx}"></div>` : ""}
                     </div>
                 `);
@@ -340,7 +367,7 @@ const ViewCompose = (() => {
             return `
                 <div class="field">
                     <label for="cmpArtSrc">Art Fill Source</label>
-                    <select id="cmpArtSrc">${buildSourceOptions("superSource", d.artSource || "", ws)}</select>
+                    <select id="cmpArtSrc">${buildSourceOptions("superSourceArt", d.artSource || "", ws)}</select>
                 </div>
                 <div class="field">
                     <label for="cmpArtPlace">Art Placement</label>
@@ -352,7 +379,7 @@ const ViewCompose = (() => {
                 ${d.artPlace === "Foreground" ? `
                     <div class="field">
                         <label for="cmpArtKey">Art Key Source</label>
-                        <select id="cmpArtKey">${buildSourceOptions("superSource", d.artKeySource || "", ws)}</select>
+                        <select id="cmpArtKey">${buildSourceOptions("key", d.artKeySource || "", ws)}</select>
                     </div>
                     <label class="check-row"><input type="checkbox" id="cmpArtPre" ${d.artPremultiplied ? "checked" : ""}> Pre-Multiplied Key</label>
                     <label class="check-row"><input type="checkbox" id="cmpArtInv" ${d.artInvert ? "checked" : ""}> Invert Key</label>
@@ -468,7 +495,7 @@ const ViewCompose = (() => {
 
                 <div class="field">
                     <label for="cmpLayerSource">Fill Source</label>
-                    <select id="cmpLayerSource">${buildSourceOptions(isSS ? "superSource" : "me", layer.source || "", ws)}</select>
+                    <select id="cmpLayerSource">${buildSourceOptions(isSS ? "superSourceBox" : "usk", layer.source || "", ws)}</select>
                 </div>
 
                 ${sameAsBg ? `
@@ -500,7 +527,7 @@ const ViewCompose = (() => {
                     ${layer.keyType === "linear" ? `
                         <div class="field">
                             <label for="cmpKeySrc">Key / Matte Source</label>
-                            <select id="cmpKeySrc">${buildSourceOptions("me", ks.linear?.keySource || "", ws)}</select>
+                            <select id="cmpKeySrc">${buildSourceOptions("key", ks.linear?.keySource || "", ws)}</select>
                         </div>
                         <label class="check-row"><input type="checkbox" id="cmpLinPre" ${ks.linear?.premultiplied ? "checked" : ""}> Pre-Multiplied</label>
                         <div class="field"><label>Clip <span class="mono" data-ro="linClip">${ks.linear?.clip ?? 50}%</span></label><input type="range" id="cmpLinClip" min="0" max="100" value="${ks.linear?.clip ?? 50}"></div>
@@ -739,11 +766,15 @@ const ViewCompose = (() => {
             `;
 
         const showTabs = selectedTarget.kind === "box" || selectedTarget.kind === "usk" || selectedTarget.kind === "dsk";
+        const activeClips = typeof CanvasRenderer !== "undefined" && typeof CanvasRenderer.getActiveMediaPlayerClips === "function"
+            ? CanvasRenderer.getActiveMediaPlayerClips()
+            : [];
 
         container.innerHTML = `
             <div class="compose-view">
                 <div class="subbar">
                     <div class="field-row" style="gap:10px;">
+                    <div class="field-row" style="gap:10px; flex-wrap:wrap;">
                         <div class="seg">
                             ${wsList.map(w => `
                                 <button class="seg-item ${w.id === ws.id ? "active" : ""}" data-cws="${w.id}">${esc(w.name)}</button>
@@ -755,6 +786,14 @@ const ViewCompose = (() => {
                                 <button class="seg-item ${stageBusMode === "preview" ? "active" : ""}" data-stage-bus="preview">PVW</button>
                             </div>
                         ` : ""}
+                        ${activeClips.map(({ mpNum, item, isLive }) => `
+                            <div class="clip-transport-pill ${item.playing === true ? "playing" : ""}" title="${esc(item.name)} (${isLive ? "Live on air" : "Cued"})">
+                                <span class="mono" style="font-size:10px; font-weight:700;">🎬 MP${mpNum}</span>
+                                ${isLive ? `<span class="badge red" style="padding:1px 5px;">LIVE</span>` : ""}
+                                <button class="btn btn-xs ${item.playing === true ? "btn-pvw solid" : ""}" data-cmp-clip-toggle="${item.id}" title="${item.playing === true ? "Pause Clip" : "Play Clip"}">${item.playing === true ? "⏸" : "▶"}</button>
+                                <button class="btn btn-xs" data-cmp-clip-stop="${item.id}" title="Stop & rewind clip to 0:00">⏹</button>
+                            </div>
+                        `).join("")}
                     </div>
                     <div class="field-row">
                         <button class="btn btn-xs ${previewSelected ? "btn-amber" : ""}" id="btnCmpPreviewSel" title="Locally preview the currently selected USK/DSK/Box on this canvas even while Off Air (does not affect live output)">
@@ -839,6 +878,18 @@ const ViewCompose = (() => {
             state.activeWorkspaceId = ws.id;
             if (typeof PopoutManager !== "undefined") PopoutManager.openActiveBus();
         });
+        container.querySelectorAll("[data-cmp-clip-toggle]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                CanvasRenderer.controlMediaClip?.(Number(btn.dataset.cmpClipToggle), "toggle");
+                render(container);
+            });
+        });
+        container.querySelectorAll("[data-cmp-clip-stop]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                CanvasRenderer.controlMediaClip?.(Number(btn.dataset.cmpClipStop), "stop");
+                render(container);
+            });
+        });
 
         // Wire SS visual presets & save custom layout
         container.querySelectorAll("[data-del-preset]").forEach(btn => {
@@ -911,7 +962,7 @@ const ViewCompose = (() => {
         if (!isSS && selectedTarget.kind === "bg") {
             container.querySelector("#cmpMePgm")?.addEventListener("change", (e) => SwitcherEngine.setMEProgram(ws, e.target.value));
             container.querySelector("#cmpMePvw")?.addEventListener("change", (e) => SwitcherEngine.setMEPreview(ws, e.target.value));
-            container.querySelector("#cmpMeCut")?.addEventListener("click", () => SwitcherEngine.performTransitionCut(ws));
+            container.querySelector("#cmpMeCut")?.addEventListener("click", () => SwitcherEngine.performTransitionCut(ws, { record: true, emit: true }));
             container.querySelector("#cmpMeAuto")?.addEventListener("click", () => SwitcherEngine.performTransitionAuto(ws));
             return;
         }
@@ -942,7 +993,7 @@ const ViewCompose = (() => {
         const layer = getCurrentLayerObj(ws);
         if (!layer) return;
         container.querySelector("#cmpLayerEnabled")?.addEventListener("change", (e) => SwitcherEngine.setLayerEnabled(ws, idx, e.target.checked, group));
-        container.querySelector("#cmpUskOnAirBtn")?.addEventListener("click", () => SwitcherEngine.setLayerEnabled(ws, idx, !layer.enabled, "usk"));
+        container.querySelector("#cmpUskOnAirBtn")?.addEventListener("click", () => SwitcherEngine.setLayerEnabled(ws, idx, !layer.enabled, "usk", true));
         container.querySelector("#cmpUskStageBtn")?.addEventListener("click", () => SwitcherEngine.toggleNextTransitionKey(ws, idx));
         container.querySelector("#cmpLayerSource")?.addEventListener("change", (e) => SwitcherEngine.setLayerSource(ws, idx, e.target.value, group));
         container.querySelector("#cmpKeyType")?.addEventListener("change", (e) => {

@@ -12,7 +12,10 @@ const HistoryManager = (() => {
     // Reasons that represent transient animation frames or internal restores (never recorded)
     const IGNORED_REASONS = new Set([
         "transitionAutoFrame",
+        "transitionAutoStart",
         "dskAutoFrame",
+        "dskAutoStart",
+        "ftbStart",
         "historyRestore",
         "storageRestore",
         "workspace",

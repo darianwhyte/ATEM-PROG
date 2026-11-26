@@ -61,6 +61,7 @@ namespace AtemProgLauncher
         public bool LanEnabled = true;
         public bool StartMinimized = false;
         public string LastAtemIp = "192.168.1.240";
+        public string StartupMode = "resume"; // "resume" | "wizard" | "blank"
 
         private static string SettingsPath
         {
@@ -95,6 +96,12 @@ namespace AtemProgLauncher
                         if (map.ContainsKey("StartMinimized")) s.StartMinimized = Convert.ToBoolean(map["StartMinimized"]);
                         if (map.ContainsKey("LastAtemIp") && !string.IsNullOrWhiteSpace(Convert.ToString(map["LastAtemIp"])))
                             s.LastAtemIp = Convert.ToString(map["LastAtemIp"]).Trim();
+                        if (map.ContainsKey("StartupMode"))
+                        {
+                            string mode = Convert.ToString(map["StartupMode"] ?? "").Trim().ToLowerInvariant();
+                            if (mode == "resume" || mode == "wizard" || mode == "blank")
+                                s.StartupMode = mode;
+                        }
                     }
                 }
             }
@@ -114,7 +121,8 @@ namespace AtemProgLauncher
                     { "Port", Port },
                     { "LanEnabled", LanEnabled },
                     { "StartMinimized", StartMinimized },
-                    { "LastAtemIp", LastAtemIp }
+                    { "LastAtemIp", LastAtemIp },
+                    { "StartupMode", StartupMode }
                 });
                 File.WriteAllText(SettingsPath, json, Encoding.UTF8);
             }
@@ -132,6 +140,17 @@ namespace AtemProgLauncher
         public override string ToString()
         {
             return string.Format("{0}  ({1})", Iface, Ip);
+        }
+    }
+
+    class StartupModeItem
+    {
+        public string Value;
+        public string Label;
+
+        public override string ToString()
+        {
+            return Label;
         }
     }
 
@@ -257,6 +276,7 @@ namespace AtemProgLauncher
         private Label lblServiceBadge;
         private Label lblServiceMeta;
         private Button btnLaunchWeb;
+        private ComboBox cmbStartupMode;
         private Button btnOpenRemote;
         private Button btnOpenWebLauncher;
         private Button btnOpenTests;
@@ -387,7 +407,7 @@ namespace AtemProgLauncher
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             MinimizeBox = true;
-            ClientSize = new Size(572, 676);
+            ClientSize = new Size(572, 710);
             BackColor = BgWindow;
             ForeColor = TextPrimary;
             Font = new Font("Segoe UI", 9f, FontStyle.Regular);
@@ -423,7 +443,7 @@ namespace AtemProgLauncher
             var miShow = new ToolStripMenuItem("Show Launcher Window", null, (s, e) => ShowLauncherWindow());
             miShow.Font = new Font(trayMenu.Font, FontStyle.Bold);
 
-            var miWeb = new ToolStripMenuItem("Launch Web GUI", null, (s, e) => OpenBrowser(GetLocalUrl("/")));
+            var miWeb = new ToolStripMenuItem("Launch Web GUI", null, (s, e) => OpenBrowser(GetStudioLaunchUrl()));
             var miRemote = new ToolStripMenuItem("Open Touch Remote (Local)", null, (s, e) => OpenBrowser(GetLocalUrl("/remote.html")));
             trayCopyLanMenu = new ToolStripMenuItem("Copy Remote Device URL (LAN)");
             trayCopyLanMenu.DropDownItems.Add(new ToolStripMenuItem("Waiting for service...") { Enabled = false });
@@ -526,14 +546,14 @@ namespace AtemProgLauncher
             var hero = new CardPanel
             {
                 Location = new Point(margin, y),
-                Size = new Size(cardW, 82),
+                Size = new Size(cardW, 116),
                 BackColor = BgHero,
                 BorderColor = Color.FromArgb(35, 86, 118)
             };
 
             var picIcon = new PictureBox
             {
-                Location = new Point(14, 19),
+                Location = new Point(14, 17),
                 Size = new Size(44, 44),
                 SizeMode = PictureBoxSizeMode.Zoom,
                 BackColor = Color.Transparent,
@@ -544,7 +564,7 @@ namespace AtemProgLauncher
             var lblTitle = new Label
             {
                 Text = "ATEM-PROG",
-                Location = new Point(68, 17),
+                Location = new Point(68, 15),
                 AutoSize = true,
                 ForeColor = TextPrimary,
                 Font = new Font("Segoe UI", 13f, FontStyle.Bold)
@@ -554,7 +574,7 @@ namespace AtemProgLauncher
             lblServiceBadge = new Label
             {
                 Text = "  ● Starting...  ",
-                Location = new Point(192, 21),
+                Location = new Point(192, 19),
                 AutoSize = true,
                 Padding = new Padding(4, 2, 4, 2),
                 BackColor = StatusAmberBg,
@@ -566,16 +586,57 @@ namespace AtemProgLauncher
             lblServiceMeta = new Label
             {
                 Text = string.Format("Port {0} · Initializing local service...", settings.Port),
-                Location = new Point(70, 46),
+                Location = new Point(70, 44),
                 Size = new Size(300, 20),
                 ForeColor = TextMuted,
                 Font = new Font("Segoe UI", 8.5f)
             };
             hero.Controls.Add(lblServiceMeta);
 
-            btnLaunchWeb = MakeButton("Launch Web GUI  →", cardW - 166, 22, 152, 38, primary: true);
-            btnLaunchWeb.Click += (s, e) => OpenBrowser(GetLocalUrl("/"));
+            btnLaunchWeb = MakeButton("Launch Web GUI  →", cardW - 166, 20, 152, 38, primary: true);
+            btnLaunchWeb.Click += (s, e) => OpenBrowser(GetStudioLaunchUrl());
             hero.Controls.Add(btnLaunchWeb);
+
+            var lblStartup = new Label
+            {
+                Text = "Startup Mode:",
+                Location = new Point(14, 81),
+                AutoSize = true,
+                ForeColor = TextMuted,
+                Font = new Font("Segoe UI", 8.25f, FontStyle.Bold)
+            };
+            hero.Controls.Add(lblStartup);
+
+            cmbStartupMode = new ComboBox
+            {
+                Location = new Point(108, 77),
+                Size = new Size(cardW - 122, 24),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = BgInput,
+                ForeColor = TextPrimary,
+                FlatStyle = FlatStyle.Flat
+            };
+            var startupItems = new[]
+            {
+                new StartupModeItem { Value = "resume", Label = "Resume Show (if saved, otherwise Setup Wizard)" },
+                new StartupModeItem { Value = "wizard", Label = "Start & Setup Wizard" },
+                new StartupModeItem { Value = "blank",  Label = "New Blank Show" }
+            };
+            int startupSelIdx = 0;
+            for (int i = 0; i < startupItems.Length; i++)
+            {
+                cmbStartupMode.Items.Add(startupItems[i]);
+                if (startupItems[i].Value == settings.StartupMode) startupSelIdx = i;
+            }
+            cmbStartupMode.SelectedIndex = startupSelIdx;
+            cmbStartupMode.SelectedIndexChanged += (s, e) =>
+            {
+                var item = cmbStartupMode.SelectedItem as StartupModeItem;
+                if (item == null || settings.StartupMode == item.Value) return;
+                settings.StartupMode = item.Value;
+                settings.Save();
+            };
+            hero.Controls.Add(cmbStartupMode);
 
             Controls.Add(hero);
             y += hero.Height + 12;
@@ -1037,9 +1098,11 @@ namespace AtemProgLauncher
             serviceStarting = true;
             UpdateUiSafe();
 
-            // First-time npm install if bridge/node_modules missing
+            // First-time or repair npm install if required bridge packages are missing
             string nodeModulesDir = Path.Combine(bridgeDir, "node_modules");
-            if (!Directory.Exists(nodeModulesDir))
+            bool depsMissing = !Directory.Exists(Path.Combine(nodeModulesDir, "ws")) ||
+                               !Directory.Exists(Path.Combine(nodeModulesDir, "atem-connection"));
+            if (depsMissing)
             {
                 AppendLocalLog("First-time setup: installing ATEM bridge dependencies (npm install)...");
                 try
@@ -1172,6 +1235,13 @@ namespace AtemProgLauncher
         private string GetLocalUrl(string path)
         {
             return string.Format("http://127.0.0.1:{0}{1}", settings.Port, path);
+        }
+
+        private string GetStudioLaunchUrl()
+        {
+            string mode = settings.StartupMode;
+            if (mode != "resume" && mode != "wizard" && mode != "blank") mode = "resume";
+            return GetLocalUrl("/?startup=" + mode);
         }
 
         private bool IsServiceListening()

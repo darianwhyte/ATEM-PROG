@@ -311,8 +311,9 @@ const StateStorage = (() => {
 
     function init() {
         if (typeof SwitcherEngine !== "undefined") {
+            const SKIP_SAVE_REASONS = new Set(["transitionAutoFrame", "dskAutoFrame", "transitionAutoStart", "dskAutoStart", "ftbStart"]);
             SwitcherEngine.subscribe(({ reason }) => {
-                if (reason === "transitionAutoFrame" || reason === "dskAutoFrame") return;
+                if (SKIP_SAVE_REASONS.has(reason)) return;
                 scheduleSave();
             });
         }

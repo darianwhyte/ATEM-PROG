@@ -87,10 +87,11 @@ const CanvasRenderer = (() => {
     }
 
     function applyLinearKey(mediaCanvas, layer, renderStack = []) {
-        const linear = layer.keySettings.linear;
-        if (!linear || !linear.keySource) return;
+        const linear = layer.keySettings?.linear;
+        const keySourceId = linear?.keySource || layer.keySource;
+        if (!linear || !keySourceId) return;
 
-        const source = getSourceById(linear.keySource);
+        const source = getSourceById(keySourceId);
         if (!source) return;
 
         const w = mediaCanvas.width, h = mediaCanvas.height;
@@ -372,17 +373,230 @@ const CanvasRenderer = (() => {
 
     let _videoRafId = null;
     let _lastVideoTick = 0;
+    let _liveClipIds = new Set();
+    let _visibilityHooked = false;
+
+    function supportsHardwareClips() {
+        if (typeof getMediaPoolLimits === "function") {
+            return getMediaPoolLimits().supportsClips;
+        }
+        return (Number(getProfile?.()?.mediaPoolClips) || 0) > 0;
+    }
+
+    function getActiveMediaPlayerClips() {
+        if (!supportsHardwareClips()) return [];
+        const mpCount = getProfile?.()?.mediaPlayers || 1;
+        const liveIds = getLiveProgramMediaClipIds();
+        const out = [];
+        for (let i = 0; i < mpCount; i++) {
+            const mp = state.mediaPlayers?.[i];
+            if (mp?.mediaId === null || mp?.mediaId === undefined) continue;
+            const item = (state.media || []).find(m => m.id === mp.mediaId);
+            if (item && item.kind === "video") {
+                out.push({
+                    mpIndex: i,
+                    mpNum: i + 1,
+                    item,
+                    isLive: liveIds.has(item.id)
+                });
+            }
+        }
+        return out;
+    }
+
+    function getLiveProgramMediaClipIds() {
+        const liveIds = new Set();
+        if (!supportsHardwareClips() || !Array.isArray(state.mediaPlayers) || !Array.isArray(state.media)) {
+            return liveIds;
+        }
+
+        const visited = new Set();
+        const collectFromSourceId = (sourceId) => {
+            if (!sourceId || visited.has(sourceId)) return;
+            visited.add(sourceId);
+
+            const mpMatch = String(sourceId).match(/^mediaPlayer(\d+)(?:Key)?$/);
+            if (mpMatch) {
+                const mpIdx = parseInt(mpMatch[1], 10) - 1;
+                const mp = state.mediaPlayers?.[mpIdx];
+                if (mp && mp.mediaId !== null && mp.mediaId !== undefined) {
+                    const item = state.media.find(m => m.id === mp.mediaId);
+                    if (item?.kind === "video") liveIds.add(item.id);
+                }
+                return;
+            }
+
+            const meMatch = String(sourceId).match(/^me(\d+)$/);
+            if (meMatch) {
+                const resId = parseInt(meMatch[1], 10) - 1;
+                const ws = state.workspaces?.find(w => w.type === "me" && w.resourceId === resId);
+                if (ws) collectFromME(ws);
+                return;
+            }
+
+            const ssMatch = String(sourceId).match(/^superSource(\d+)$/);
+            if (ssMatch) {
+                const resId = parseInt(ssMatch[1], 10) - 1;
+                const ws = state.workspaces?.find(w => w.type === "superSource" && w.resourceId === resId);
+                if (ws?.data) {
+                    if (ws.data.artSource) collectFromSourceId(ws.data.artSource);
+                    if (ws.data.artKeySource) collectFromSourceId(ws.data.artKeySource);
+                    (ws.data.boxes || []).forEach(b => {
+                        if (b?.enabled && b.source) collectFromSourceId(b.source);
+                    });
+                }
+            }
+        };
+
+        const collectFromME = (ws) => {
+            if (!ws?.data) return;
+            const meKey = `__me_${ws.resourceId}`;
+            if (visited.has(meKey)) return;
+            visited.add(meKey);
+
+            // Live background source (never previewSource — preview stays cued!)
+            if (ws.data.source) collectFromSourceId(ws.data.source);
+
+            // Active transition incoming source if mid-transition on Program
+            if ((ws.data.transitionProgress || 0) > 0 && !ws.data.previewTransition && ws.data.previewSource) {
+                collectFromSourceId(ws.data.previewSource);
+            }
+
+            // On-Air Upstream Keyers
+            const maxUsk = typeof getUpstreamKeyersPerME === "function" ? getUpstreamKeyersPerME(getProfile()) : 4;
+            (ws.data.usk || []).slice(0, maxUsk).forEach(u => {
+                if (u?.enabled) {
+                    if (u.source) collectFromSourceId(u.source);
+                    const ks = u.keySettings?.[u.keyType];
+                    if (ks?.keySource) collectFromSourceId(ks.keySource);
+                }
+            });
+
+            // On-Air Downstream Keyers on M/E 1
+            if (ws.resourceId === 0 && typeof getAvailableDSKs === "function") {
+                getAvailableDSKs().forEach(dsk => {
+                    if (dsk?.enabled) {
+                        if (dsk.source) collectFromSourceId(dsk.source);
+                        if (dsk.keySource) collectFromSourceId(dsk.keySource);
+                    }
+                });
+            }
+        };
+
+        // Walk all available M/E Program buses
+        (state.workspaces || []).forEach(ws => {
+            if (ws.type === "me" && (typeof isWorkspaceAvailable !== "function" || isWorkspaceAvailable(ws))) {
+                collectFromME(ws);
+            }
+        });
+
+        // Walk Aux outputs
+        const auxCount = getProfile?.()?.assignableOutputs || 0;
+        for (let ch = 1; ch <= auxCount; ch++) {
+            const outSrc = state.outputs?.[ch]?.source;
+            if (outSrc) collectFromSourceId(outSrc);
+        }
+
+        return liveIds;
+    }
+
+    function syncLiveMediaClips({ triggerStart = true } = {}) {
+        const nextLive = getLiveProgramMediaClipIds();
+        if (!Array.isArray(state.media)) {
+            _liveClipIds = nextLive;
+            return;
+        }
+
+        let changed = false;
+        state.media.forEach(item => {
+            if (!item || item.kind !== "video") return;
+            const wasLive = _liveClipIds.has(item.id);
+            const isNowLive = nextLive.has(item.id);
+
+            if (isNowLive && !wasLive && triggerStart) {
+                // ATEM hardware behavior: auto-trigger clip from 0:00 when cut/pushed Live
+                item.playing = true;
+                const vid = ensureMediaVideo(item) || item._video;
+                if (vid) {
+                    try { vid.currentTime = 0; } catch {}
+                    vid.play().catch(() => {});
+                }
+                ensureVideoTickLoop();
+                changed = true;
+            } else if (!isNowLive && wasLive) {
+                // Left Live Program: park & rewind to frame 0 so Preview stays cued & idle
+                item.playing = false;
+                if (item._video) {
+                    try {
+                        item._video.pause();
+                        item._video.currentTime = 0;
+                    } catch {}
+                }
+                changed = true;
+            }
+        });
+
+        _liveClipIds = nextLive;
+        if (changed && typeof AppUI !== "undefined" && typeof AppUI.renderLiveTick === "function") {
+            AppUI.renderLiveTick();
+        }
+    }
+
+    function controlMediaClip(mediaId, action = "toggle") {
+        const item = (state.media || []).find(m => m.id === Number(mediaId));
+        if (!item || item.kind !== "video") return false;
+
+        if (action === "toggle") {
+            action = item.playing === true ? "pause" : "play";
+        }
+
+        if (action === "play") {
+            item.playing = true;
+            const vid = ensureMediaVideo(item) || item._video;
+            if (vid) vid.play().catch(() => {});
+            ensureVideoTickLoop();
+        } else if (action === "pause") {
+            item.playing = false;
+            if (item._video) {
+                try { item._video.pause(); } catch {}
+            }
+        } else if (action === "stop") {
+            item.playing = false;
+            if (item._video) {
+                try {
+                    item._video.pause();
+                    item._video.currentTime = 0;
+                } catch {}
+            }
+        }
+
+        if (typeof AppUI !== "undefined" && typeof AppUI.renderLiveTick === "function") {
+            AppUI.renderLiveTick();
+        }
+        return true;
+    }
 
     function hasPlayingMediaPlayerVideo() {
+        if (typeof document !== "undefined" && document.hidden) return false;
+        if (!supportsHardwareClips()) return false;
         if (!Array.isArray(state.mediaPlayers) || !Array.isArray(state.media)) return false;
-        return state.mediaPlayers.some(mp => {
+        const mpCount = getProfile?.()?.mediaPlayers || 1;
+        return state.mediaPlayers.slice(0, mpCount).some(mp => {
             if (mp?.mediaId === null || mp?.mediaId === undefined) return false;
             const item = state.media.find(m => m.id === mp.mediaId);
-            return item?.kind === "video" && item._video && !item._video.paused && item._video.readyState >= 2;
+            return item?.kind === "video" && item.playing === true && item._video && !item._video.paused && item._video.readyState >= 2;
         });
     }
 
     function ensureVideoTickLoop() {
+        if (!_visibilityHooked && typeof document !== "undefined") {
+            _visibilityHooked = true;
+            document.addEventListener("visibilitychange", () => {
+                if (!document.hidden && hasPlayingMediaPlayerVideo()) {
+                    ensureVideoTickLoop();
+                }
+            });
+        }
         if (_videoRafId !== null || typeof requestAnimationFrame === "undefined") return;
         const step = (ts) => {
             if (!hasPlayingMediaPlayerVideo()) {
@@ -391,10 +605,14 @@ const CanvasRenderer = (() => {
             }
             if (ts - _lastVideoTick >= 33) {
                 _lastVideoTick = ts;
-                if (typeof AppUI !== "undefined" && typeof AppUI.renderLiveTick === "function") {
-                    AppUI.renderLiveTick();
-                } else if (typeof updateUI === "function") {
-                    updateUI();
+                const activeView = typeof AppUI !== "undefined" ? AppUI.activeView : "";
+                const hasPopouts = typeof PopoutManager !== "undefined" && PopoutManager.hasOpenPopouts?.();
+                if (activeView === "switcher" || activeView === "compose" || activeView === "routing" || hasPopouts) {
+                    if (typeof AppUI !== "undefined" && typeof AppUI.renderLiveTick === "function") {
+                        AppUI.renderLiveTick();
+                    } else if (typeof updateUI === "function") {
+                        updateUI();
+                    }
                 }
             }
             _videoRafId = requestAnimationFrame(step);
@@ -404,6 +622,7 @@ const CanvasRenderer = (() => {
 
     function ensureMediaVideo(media) {
         if (!media || !media.url || media.kind !== "video") return null;
+        if (!supportsHardwareClips()) return null;
         if (!media._video || media._videoUrl !== media.url) {
             const v = document.createElement("video");
             v.muted = true;
@@ -412,18 +631,29 @@ const CanvasRenderer = (() => {
             v.preload = "auto";
             v.src = media.url;
             v.addEventListener("loadeddata", () => {
-                if (media.playing !== false) v.play().catch(() => {});
-                ensureVideoTickLoop();
+                if (media.playing === true) {
+                    v.play().catch(() => {});
+                    ensureVideoTickLoop();
+                } else if (typeof AppUI !== "undefined" && typeof AppUI.renderLiveTick === "function") {
+                    // Paint cued frame 0 onto PVW/Compose canvases without running continuous RAF
+                    AppUI.renderLiveTick();
+                }
             });
             v.addEventListener("play", () => ensureVideoTickLoop());
+            v.addEventListener("ended", () => {
+                if (media.loop === false) {
+                    media.playing = false;
+                    if (typeof AppUI !== "undefined") AppUI.refresh("mediaClipState");
+                }
+            });
             media._video = v;
             media._videoUrl = media.url;
-            if (media.playing !== false) v.play().catch(() => {});
+            if (media.playing === true) v.play().catch(() => {});
         }
         const vid = media._video;
         vid.loop = media.loop !== false;
-        if (media.playing === false && !vid.paused) vid.pause();
-        else if (media.playing !== false && vid.paused && vid.readyState >= 2) {
+        if (media.playing !== true && !vid.paused) vid.pause();
+        else if (media.playing === true && vid.paused && vid.readyState >= 2) {
             vid.play().catch(() => {});
             ensureVideoTickLoop();
         }
@@ -433,13 +663,18 @@ const CanvasRenderer = (() => {
     function drawMediaToCanvas(canvas, media) {
         if (!canvas || !media || !media.url) return;
 
-        let ctx = canvas._ctx || canvas.getContext("2d", { willReadFrequently: true });
+        // GPU-accelerated 2D context (avoid willReadFrequently on plain media/video blits)
+        let ctx = canvas._ctx || canvas.getContext("2d");
         canvas._ctx = ctx;
         if (canvas.width === 0 || canvas.height === 0) {
             ensureFrameBuffer(canvas);
         }
 
         if (media.kind === "video") {
+            if (!supportsHardwareClips()) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                return;
+            }
             const vid = ensureMediaVideo(media);
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             if (!vid) return;
@@ -449,7 +684,7 @@ const CanvasRenderer = (() => {
             const dw = vw * scale;
             const dh = vh * scale;
             ctx.drawImage(vid, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh);
-            ensureVideoTickLoop();
+            if (media.playing === true) ensureVideoTickLoop();
             return;
         }
 
@@ -505,26 +740,148 @@ const CanvasRenderer = (() => {
         };
     }
 
-    function compositeLayerOntoContext(targetCtx, targetWidth, targetHeight, layer, source, renderStack) {
-        const needsPixelKey = layer.keyType === "luma" || layer.keyType === "linear" || layer.keyType === "chroma" || layer.keyType === "pattern";
+    const USK_ACCENTS = ["#38bdf8", "#4ade80", "#a78bfa", "#f472b6"];
+    const DSK_ACCENTS = ["#f59e0b", "#fb7185", "#2dd4bf", "#facc15"];
+    const KEYER_STACK_ALPHA = 0.82;
+
+    function formatKeyerSourceInfo(srcId) {
+        if (!srcId) return "BLK (Unassigned)";
+        const shortN = typeof getSourceShortName === "function" ? getSourceShortName(srcId) : srcId;
+        const full = typeof getSourceDisplayName === "function" ? getSourceDisplayName(srcId) : srcId;
+        if (!full || full === srcId || full.toUpperCase() === shortN.toUpperCase()) return shortN;
+        const parenMatch = full.match(/\(([^)]+)\)/);
+        const detail = parenMatch ? parenMatch[1].trim() : full;
+        if (!detail || detail.toUpperCase() === shortN.toUpperCase()) return shortN;
+        return `${shortN} · ${detail}`;
+    }
+
+    function drawKeyerOutline(ctx, rect, accent, targetWidth, dashed = false) {
+        if (!rect || rect.w <= 1 || rect.h <= 1) return;
+        const lw = Math.max(2, Math.round(targetWidth / 480));
+        const inset = lw / 2;
+        ctx.save();
+        ctx.globalAlpha = 0.92;
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = lw;
+        if (dashed) ctx.setLineDash([lw * 3, lw * 2]);
+        ctx.strokeRect(
+            rect.x + inset,
+            rect.y + inset,
+            Math.max(1, rect.w - lw),
+            Math.max(1, rect.h - lw)
+        );
+        ctx.restore();
+    }
+
+    function drawKeyerNamingBox(ctx, badge, targetWidth, targetHeight) {
+        const { rect, title, sourceText, accent, stackSlot = 0 } = badge;
+        if (!rect || rect.w <= 8 || rect.h <= 8) return;
+
+        const scale = Math.max(0.55, targetWidth / 960);
+        const fontSize = Math.max(11, Math.round(13 * scale));
+        const padX = Math.round(9 * scale);
+        const padY = Math.round(5 * scale);
+        const accentBarW = Math.max(3, Math.round(4 * scale));
+        const margin = Math.round(8 * scale);
+        const gap = Math.round(5 * scale);
+        const boxH = fontSize + padY * 2;
+        const radius = Math.max(3, Math.round(4 * scale));
+
+        const prefix = `${title}: `;
+        let label = `${prefix}${sourceText}`;
+
+        ctx.save();
+        ctx.globalAlpha = 1;
+        ctx.font = `700 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+
+        const maxBoxW = Math.max(80 * scale, Math.min(rect.w - margin * 2, targetWidth * 0.46));
+        const maxTextW = Math.max(40, maxBoxW - padX * 2 - accentBarW - Math.round(4 * scale));
+        if (ctx.measureText(label).width > maxTextW) {
+            while (label.length > prefix.length + 2 && ctx.measureText(label + "…").width > maxTextW) {
+                label = label.slice(0, -1);
+            }
+            label += "…";
+        }
+
+        const textW = ctx.measureText(label).width;
+        const boxW = Math.min(maxBoxW, textW + padX * 2 + accentBarW + Math.round(4 * scale));
+
+        // Anchor in the top-right corner of the layer's active footprint (clamped on-screen)
+        const rightEdge = Math.min(targetWidth, rect.x + rect.w);
+        const topEdge = Math.max(0, rect.y);
+        const bx = Math.max(margin, rightEdge - boxW - margin);
+        const by = Math.min(targetHeight - boxH - margin, topEdge + margin + stackSlot * (boxH + gap));
+
+        // Rounded dark pill background (unaffected by keyer)
+        ctx.fillStyle = "rgba(9, 13, 20, 0.90)";
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = Math.max(1.25, 1.5 * scale);
+        ctx.beginPath();
+        ctx.moveTo(bx + radius, by);
+        ctx.lineTo(bx + boxW - radius, by);
+        ctx.quadraticCurveTo(bx + boxW, by, bx + boxW, by + radius);
+        ctx.lineTo(bx + boxW, by + boxH - radius);
+        ctx.quadraticCurveTo(bx + boxW, by + boxH, bx + boxW - radius, by + boxH);
+        ctx.lineTo(bx + radius, by + boxH);
+        ctx.quadraticCurveTo(bx, by + boxH, bx, by + boxH - radius);
+        ctx.lineTo(bx, by + radius);
+        ctx.quadraticCurveTo(bx, by, bx + radius, by);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // Crisp color accent strip on left edge of badge
+        ctx.fillStyle = accent;
+        ctx.fillRect(bx + 1, by + 1, accentBarW, boxH - 2);
+
+        // Label text (accent-colored prefix + bright source info)
+        const textX = bx + accentBarW + padX;
+        const textY = by + boxH / 2;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        const prefixW = ctx.measureText(prefix).width;
+        ctx.fillStyle = accent;
+        ctx.fillText(prefix, textX, textY);
+        ctx.fillStyle = "#f1f5f9";
+        ctx.fillText(label.slice(prefix.length), textX + prefixW, textY);
+
+        ctx.restore();
+    }
+
+    function compositeLayerOntoContext(targetCtx, targetWidth, targetHeight, layer, source, renderStack, opts = {}) {
+        const isSSBox = isBoxLayer(layer);
+        const needsPixelKey = !isSSBox && !!source && (layer.keyType === "luma" || layer.keyType === "linear" || layer.keyType === "chroma" || layer.keyType === "pattern");
         const layerEntry = acquireCanvas(targetWidth, targetHeight, needsPixelKey);
 
         try {
             const layerCanvas = layerEntry.canvas;
             const layerCtx = layerEntry.ctx;
 
-            renderSourceRaster(source, layerCanvas, renderStack);
+            if (source) {
+                renderSourceRaster(source, layerCanvas, renderStack);
+                if (!isSSBox) {
+                    if (layer.keyType === "luma") applyLumaKey(layerCanvas, layer);
+                    else if (layer.keyType === "linear") applyLinearKey(layerCanvas, layer, renderStack);
+                    else if (layer.keyType === "chroma") applyChromaKey(layerCanvas, layer);
+                    else if (layer.keyType === "pattern") applyPatternKey(layerCanvas, layer);
+                }
+            } else {
+                renderBlackSource(layerCanvas);
+            }
 
-            if (layer.keyType === "luma") applyLumaKey(layerCanvas, layer);
-            else if (layer.keyType === "linear") applyLinearKey(layerCanvas, layer, renderStack);
-            else if (layer.keyType === "chroma") applyChromaKey(layerCanvas, layer);
-            else if (layer.keyType === "pattern") applyPatternKey(layerCanvas, layer);
-
+            // Compute active mask bounds (naming box & outline stay unaffected by key)
+            let maskFrac = { left: 0, right: 0, top: 0, bottom: 0 };
             if (layer.maskEnabled) {
-                const mLeft = (layer.maskLeft / 18000) * layerCanvas.width;
-                const mRight = (layer.maskRight / 18000) * layerCanvas.width;
-                const mTop = (layer.maskTop / 18000) * layerCanvas.height;
-                const mBottom = (layer.maskBottom / 18000) * layerCanvas.height;
+                maskFrac = {
+                    left: Math.max(0, Math.min(1, (layer.maskLeft || 0) / 18000)),
+                    right: Math.max(0, Math.min(1, (layer.maskRight || 0) / 18000)),
+                    top: Math.max(0, Math.min(1, (layer.maskTop || 0) / 18000)),
+                    bottom: Math.max(0, Math.min(1, (layer.maskBottom || 0) / 18000))
+                };
+                const mLeft = maskFrac.left * layerCanvas.width;
+                const mRight = maskFrac.right * layerCanvas.width;
+                const mTop = maskFrac.top * layerCanvas.height;
+                const mBottom = maskFrac.bottom * layerCanvas.height;
                 const maskW = Math.max(0, layerCanvas.width - mLeft - mRight);
                 const maskH = Math.max(0, layerCanvas.height - mTop - mBottom);
                 layerCtx.save();
@@ -554,15 +911,44 @@ const CanvasRenderer = (() => {
             const sourceH = layerCanvas.height * (1 - crop.top - crop.bottom);
 
             if (sourceW > 0 && sourceH > 0 && croppedW > 0 && croppedH > 0) {
+                targetCtx.save();
+                if (!isSSBox) {
+                    targetCtx.globalAlpha = source ? KEYER_STACK_ALPHA : 0.35;
+                }
                 targetCtx.drawImage(layerCanvas, sourceX, sourceY, sourceW, sourceH, croppedX, croppedY, croppedW, croppedH);
+                targetCtx.restore();
 
-                const allowBorder = isBoxLayer(layer) ? !!getProfile()?.supportsBoxBorders : true;
+                const allowBorder = isSSBox ? !!getProfile()?.supportsBoxBorders : true;
                 if (allowBorder && visualSettings.borderEnabled && visualSettings.borderWidth > 0) {
                     targetCtx.save();
                     targetCtx.strokeStyle = visualSettings.borderColor || "#ffffff";
                     targetCtx.lineWidth = visualSettings.borderWidth;
                     targetCtx.strokeRect(croppedX, croppedY, croppedW, croppedH);
                     targetCtx.restore();
+                }
+
+                // For M/E USK layers, draw a crisp layout outline and queue the top-right naming box
+                if (!isSSBox) {
+                    const uskIdx = Number.isInteger(opts.uskIndex) ? opts.uskIndex : 0;
+                    const accent = USK_ACCENTS[uskIdx % USK_ACCENTS.length];
+                    const visRect = layer.maskEnabled
+                        ? {
+                            x: croppedX + croppedW * maskFrac.left,
+                            y: croppedY + croppedH * maskFrac.top,
+                            w: Math.max(0, croppedW * (1 - maskFrac.left - maskFrac.right)),
+                            h: Math.max(0, croppedH * (1 - maskFrac.top - maskFrac.bottom))
+                        }
+                        : { x: croppedX, y: croppedY, w: croppedW, h: croppedH };
+
+                    drawKeyerOutline(targetCtx, visRect, accent, targetWidth, !source);
+                    if (Array.isArray(opts.badges)) {
+                        opts.badges.push({
+                            rect: visRect,
+                            title: `USK ${uskIdx + 1}`,
+                            sourceText: formatKeyerSourceInfo(layer.source),
+                            accent
+                        });
+                    }
                 }
             }
         } finally {
@@ -571,7 +957,7 @@ const CanvasRenderer = (() => {
     }
 
     function getDSKEffectiveAlpha(dsk, isPreview = false) {
-        if (!dsk || !dsk.source) return 0;
+        if (!dsk) return 0;
 
         if (isPreview) {
             const stagedOn = dsk.enabled !== !!dsk.tie;
@@ -586,26 +972,38 @@ const CanvasRenderer = (() => {
         return dsk.enabled ? 1 : 0;
     }
 
-    function compositeDSKLayer(targetCtx, targetWidth, targetHeight, dsk, alpha, renderStack) {
+    function compositeDSKLayer(targetCtx, targetWidth, targetHeight, dsk, alpha, renderStack, badges = null) {
+        if (!dsk || alpha <= 0) return;
         const source = getSourceById(dsk.source);
-        if (!source || alpha <= 0) return;
+        const dskIdx = Number.isInteger(dsk.id) ? dsk.id : 0;
+        const accent = DSK_ACCENTS[dskIdx % DSK_ACCENTS.length];
 
-        const dskEntry = acquireCanvas(targetWidth, targetHeight, true);
+        const dskEntry = acquireCanvas(targetWidth, targetHeight, !!source);
         try {
             const dskCanvas = dskEntry.canvas;
             const dskCtx = dskEntry.ctx;
 
-            renderSourceRaster(source, dskCanvas, renderStack);
+            if (source) {
+                renderSourceRaster(source, dskCanvas, renderStack);
+                const mode = getDSKMode(dsk);
+                if (mode === "luma") applyLumaKey(dskCanvas, dsk);
+                else if (mode === "linear") applyLinearKey(dskCanvas, dsk, renderStack);
+            } else {
+                renderBlackSource(dskCanvas);
+            }
 
-            const mode = getDSKMode(dsk);
-            if (mode === "luma") applyLumaKey(dskCanvas, dsk);
-            else if (mode === "linear") applyLinearKey(dskCanvas, dsk, renderStack);
-
+            let maskFrac = { left: 0, right: 0, top: 0, bottom: 0 };
             if (dsk.maskEnabled) {
-                const mLeft = (dsk.maskLeft / 18000) * dskCanvas.width;
-                const mRight = (dsk.maskRight / 18000) * dskCanvas.width;
-                const mTop = (dsk.maskTop / 18000) * dskCanvas.height;
-                const mBottom = (dsk.maskBottom / 18000) * dskCanvas.height;
+                maskFrac = {
+                    left: Math.max(0, Math.min(1, (dsk.maskLeft || 0) / 18000)),
+                    right: Math.max(0, Math.min(1, (dsk.maskRight || 0) / 18000)),
+                    top: Math.max(0, Math.min(1, (dsk.maskTop || 0) / 18000)),
+                    bottom: Math.max(0, Math.min(1, (dsk.maskBottom || 0) / 18000))
+                };
+                const mLeft = maskFrac.left * dskCanvas.width;
+                const mRight = maskFrac.right * dskCanvas.width;
+                const mTop = maskFrac.top * dskCanvas.height;
+                const mBottom = maskFrac.bottom * dskCanvas.height;
                 const maskW = Math.max(0, dskCanvas.width - mLeft - mRight);
                 const maskH = Math.max(0, dskCanvas.height - mTop - mBottom);
                 dskCtx.save();
@@ -616,21 +1014,40 @@ const CanvasRenderer = (() => {
             }
 
             targetCtx.save();
-            targetCtx.globalAlpha = alpha;
+            targetCtx.globalAlpha = alpha * (source ? KEYER_STACK_ALPHA : 0.35);
             targetCtx.drawImage(dskCanvas, 0, 0, targetWidth, targetHeight);
             targetCtx.restore();
+
+            const visRect = dsk.maskEnabled
+                ? {
+                    x: targetWidth * maskFrac.left,
+                    y: targetHeight * maskFrac.top,
+                    w: Math.max(0, targetWidth * (1 - maskFrac.left - maskFrac.right)),
+                    h: Math.max(0, targetHeight * (1 - maskFrac.top - maskFrac.bottom))
+                }
+                : { x: 0, y: 0, w: targetWidth, h: targetHeight };
+
+            drawKeyerOutline(targetCtx, visRect, accent, targetWidth, !source);
+            if (Array.isArray(badges)) {
+                badges.push({
+                    rect: visRect,
+                    title: `DSK ${dskIdx + 1}`,
+                    sourceText: formatKeyerSourceInfo(dsk.source),
+                    accent
+                });
+            }
         } finally {
             releaseCanvas(dskEntry);
         }
     }
 
-    function compositeDownstreamKeyers(targetCtx, targetWidth, targetHeight, isPreview = false, renderStack = []) {
+    function compositeDownstreamKeyers(targetCtx, targetWidth, targetHeight, isPreview = false, renderStack = [], badges = null) {
         const dsks = getAvailableDSKs();
         for (let i = 0; i < dsks.length; i++) {
             const dsk = dsks[i];
             const alpha = getDSKEffectiveAlpha(dsk, isPreview);
             if (alpha > 0) {
-                compositeDSKLayer(targetCtx, targetWidth, targetHeight, dsk, alpha, renderStack);
+                compositeDSKLayer(targetCtx, targetWidth, targetHeight, dsk, alpha, renderStack, badges);
             }
         }
     }
@@ -658,19 +1075,33 @@ const CanvasRenderer = (() => {
                 renderBlackSource(meCanvas);
             }
 
+            const badges = [];
             if (workspace.data.usk) {
-                workspace.data.usk.forEach(layer => {
+                const maxUsks = typeof getUpstreamKeyersPerME === "function" ? getUpstreamKeyersPerME(getProfile()) : 4;
+                workspace.data.usk.slice(0, maxUsks).forEach((layer, uskIdx) => {
                     if (!layer.enabled) return;
                     const layerSource = getSourceById(layer.source);
-                    if (!layerSource) return;
-                    compositeLayerOntoContext(meCtx, targetCanvas.width, targetCanvas.height, layer, layerSource, renderStack);
+                    compositeLayerOntoContext(meCtx, targetCanvas.width, targetCanvas.height, layer, layerSource, renderStack, {
+                        uskIndex: uskIdx,
+                        badges
+                    });
                 });
             }
 
             // Downstream Keyers sit downstream of M/E 1 output on ATEM switchers
             if (meIndex === 0) {
-                compositeDownstreamKeyers(meCtx, targetCanvas.width, targetCanvas.height, !!source._preview, renderStack);
+                compositeDownstreamKeyers(meCtx, targetCanvas.width, targetCanvas.height, !!source._preview, renderStack, badges);
             }
+
+            // Draw crisp top-right USK/DSK naming boxes above all layers (unaffected by keying/translucency),
+            // stacking full-frame badges neatly downward so stacked layers never collide.
+            let cornerStack = 0;
+            badges.forEach(badge => {
+                const r = badge.rect;
+                const isTopRightCorner = (r.x + r.w >= targetCanvas.width * 0.92) && (r.y <= targetCanvas.height * 0.08);
+                badge.stackSlot = isTopRightCorner ? cornerStack++ : 0;
+                drawKeyerNamingBox(meCtx, badge, targetCanvas.width, targetCanvas.height);
+            });
 
             // Fade to Black (FTB) sits after everything on Program output
             if (!source._preview && workspace.data.ftb) {
@@ -1545,6 +1976,10 @@ function renderMasterPreviewFrame() {
         renderSource,
         compositeTransition,
         drawMediaKeyToCanvas,
-        hideAllWorkspaces
+        hideAllWorkspaces,
+        getLiveProgramMediaClipIds,
+        syncLiveMediaClips,
+        controlMediaClip,
+        getActiveMediaPlayerClips
     };
 })();

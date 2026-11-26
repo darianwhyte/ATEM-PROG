@@ -15,10 +15,10 @@ if ! command -v node >/dev/null 2>&1; then
     exit 0
 fi
 
-# First-time dependency install if copied fresh onto a Mac
-if [ ! -d "$BRIDGE_DIR/node_modules" ]; then
+# First-time or repair dependency install if required packages are missing
+if [ ! -d "$BRIDGE_DIR/node_modules/ws" ] || [ ! -d "$BRIDGE_DIR/node_modules/atem-connection" ]; then
     osascript -e 'display notification "Installing ATEM-PROG service dependencies (first run)..." with title "ATEM-PROG"' >/dev/null 2>&1 || true
-    (cd "$BRIDGE_DIR" && npm install >/tmp/atem-prog-npm.log 2>&1)
+    (cd "$BRIDGE_DIR" && npm install --no-audit --no-fund >/tmp/atem-prog-npm.log 2>&1)
 fi
 
 # Start background Node service silently if not already listening on 8993

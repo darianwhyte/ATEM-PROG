@@ -309,7 +309,8 @@ const PatchSheetExporter = (() => {
     }
 
     function openPrintablePatchSheet(projectName) {
-        const name = (projectName || elements.txtProjectName?.value || "ATEM Show Patch").trim();
+        const legacyName = typeof elements !== "undefined" ? elements.txtProjectName?.value : "";
+        const name = (projectName || state.projectName || legacyName || "ATEM Show Patch").trim();
         const html = buildPatchHtml(name);
         const win = window.open("", "_blank", "width=1140,height=860");
         if (!win) {
@@ -330,7 +331,8 @@ const PatchSheetExporter = (() => {
 
     function exportPatchCsv(projectName) {
         const profile = getProfile() || {};
-        const name = (projectName || elements.txtProjectName?.value || "atem_patch").trim().replace(/[^a-zA-Z0-9_-]/g, "_");
+        const legacyName = typeof elements !== "undefined" ? elements.txtProjectName?.value : "";
+        const name = (projectName || state.projectName || legacyName || "atem_patch").trim().replace(/[^a-zA-Z0-9_-]/g, "_");
         const lines = [];
         lines.push(["Section", "ID", "Short Name", "Long Name", "Assignment / Follow", "Substitutions / Meta", "Notes"].map(csvCell).join(","));
 
@@ -372,6 +374,7 @@ const PatchSheetExporter = (() => {
     return {
         openPrintablePatchSheet,
         exportPatchCsv,
+        downloadPatchCsv: exportPatchCsv,
         buildPatchHtml
     };
 })();

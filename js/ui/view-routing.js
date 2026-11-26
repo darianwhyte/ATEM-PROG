@@ -142,7 +142,17 @@ const ViewRouting = (() => {
             </div>
         `;
 
-        bodyEl.querySelector("#rtInSearch")?.addEventListener("input", (e) => { inputSearch = e.target.value; renderInputsTab(bodyEl); });
+        bodyEl.querySelector("#rtInSearch")?.addEventListener("input", (e) => {
+            const selStart = e.target.selectionStart;
+            const selEnd = e.target.selectionEnd;
+            inputSearch = e.target.value;
+            renderInputsTab(bodyEl);
+            const nextInp = bodyEl.querySelector("#rtInSearch");
+            if (nextInp) {
+                nextInp.focus();
+                if (selStart !== null && selEnd !== null) nextInp.setSelectionRange(selStart, selEnd);
+            }
+        });
         bodyEl.querySelectorAll("[data-in-ch]").forEach(btn => {
             btn.addEventListener("click", () => { selectedInputCh = Number(btn.dataset.inCh); renderInputsTab(bodyEl); });
         });
@@ -256,17 +266,19 @@ const ViewRouting = (() => {
                             <select id="rtAuxSrc">${buildSourceOptions("output", outObj.source || "")}</select>
                         </div>
 
-                        <div class="card" style="padding:10px 12px; display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                            <div>
-                                <div style="font-size:12px; font-weight:600;">Bus Mapping Status</div>
-                                <div class="muted" style="font-size:11px;">
-                                    ${rule?.enabled
-                                        ? `Following M/E ${rule.leadMeIndex + 1} (${Object.keys(rule.substitutions || {}).length} substitution(s))`
-                                        : "Independent manual output"}
+                        ${typeof supportsBusMapping === "function" && supportsBusMapping() ? `
+                            <div class="card" style="padding:10px 12px; display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                                <div>
+                                    <div style="font-size:12px; font-weight:600;">Bus Mapping Status</div>
+                                    <div class="muted" style="font-size:11px;">
+                                        ${rule?.enabled
+                                            ? `Following M/E ${rule.leadMeIndex + 1} (${Object.keys(rule.substitutions || {}).length} substitution(s))`
+                                            : "Independent manual output"}
+                                    </div>
                                 </div>
+                                <button class="btn btn-sm btn-accent-soft" id="btnJumpBusMap">Configure in Bus Mapping →</button>
                             </div>
-                            <button class="btn btn-sm btn-accent-soft" id="btnJumpBusMap">Configure in Bus Mapping →</button>
-                        </div>
+                        ` : ""}
 
                         <div class="field">
                             <label for="rtAuxNotes">Destination Notes</label>
@@ -676,14 +688,16 @@ const ViewRouting = (() => {
     }
 
     function render(container) {
-        const ruleCount = (state.busFollowRules || []).filter(r => r.enabled).length;
+        const canBusMap = typeof supportsBusMapping === "function" ? supportsBusMapping() : false;
+        if (subTab === "busmap" && !canBusMap) subTab = "inputs";
+        const ruleCount = canBusMap ? (state.busFollowRules || []).filter(r => r.enabled).length : 0;
         container.innerHTML = `
             <div class="routing-view">
                 <div class="subbar">
                     <div class="seg">
                         <button class="seg-item ${subTab === "inputs" ? "active" : ""}" data-rtab="inputs">Inputs & Labels</button>
                         <button class="seg-item ${subTab === "outputs" ? "active" : ""}" data-rtab="outputs">Outputs (Aux)</button>
-                        <button class="seg-item ${subTab === "busmap" ? "active" : ""}" data-rtab="busmap">Bus Mapping${ruleCount ? ` (${ruleCount})` : ""}</button>
+                        ${canBusMap ? `<button class="seg-item ${subTab === "busmap" ? "active" : ""}" data-rtab="busmap">Bus Mapping${ruleCount ? ` (${ruleCount})` : ""}</button>` : ""}
                         <button class="seg-item ${subTab === "multiview" ? "active" : ""}" data-rtab="multiview">Multi-Views</button>
                     </div>
                     <div class="field-row">

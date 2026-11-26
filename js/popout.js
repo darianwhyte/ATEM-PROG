@@ -531,7 +531,7 @@ const PopoutManager = (() => {
         const groups = getRoutableMultiviewOptions();
         const flat = [];
         groups.forEach(g => {
-            (g.items || []).forEach(it => flat.push({ id: it.id, label: it.name }));
+            (g.items || []).forEach(it => flat.push({ id: it.id, label: it.label ?? it.name ?? it.id }));
         });
         return flat;
     }

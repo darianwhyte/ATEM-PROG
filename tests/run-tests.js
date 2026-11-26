@@ -70,6 +70,8 @@ const loadScript = (relPath) => {
     "js/macro.js",
     "js/record-macro.js",
     "js/playback-macro.js",
+    "js/popout.js",
+    "js/patch-sheet.js",
     "js/export.js",
     "tests/engine.test.js"
 ].forEach(loadScript);

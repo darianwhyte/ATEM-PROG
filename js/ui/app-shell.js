@@ -1,4 +1,4 @@
-// =========================================================================
+ atem// =========================================================================
 // ATEM-PROG v3 — APPLICATION SHELL & ROUTER (js/ui/app-shell.js)
 // Lean JS-first shell managing top navigation, view routing, keyboard
 // shortcuts, live canvas ticking, toasts, and unified engine sync.
@@ -131,8 +131,8 @@ const AppUI = (() => {
         const canUndo = typeof HistoryManager !== "undefined" && HistoryManager.canUndo();
         const canRedo = typeof HistoryManager !== "undefined" && HistoryManager.canRedo();
         const isRec = typeof MacroRecorder !== "undefined" && MacroRecorder.isRecording;
-        const recSlot = isRec ? (MacroRecorder.recordingSlotIndex + 1) : 1;
-        const recCount = isRec ? MacroRecorder.recordedOps.length : 0;
+        const recSlot = isRec ? (MacroRecorder.activeRecordingSlot + 1) : 1;
+        const recCount = isRec ? MacroRecorder.recordedCount : 0;
 
         const tabs = [
             { id: "switcher", label: "Switcher" },
@@ -193,7 +193,7 @@ const AppUI = (() => {
         header.querySelector("#btnHdrUndo")?.addEventListener("click", () => HistoryManager.undo());
         header.querySelector("#btnHdrRedo")?.addEventListener("click", () => HistoryManager.redo());
         header.querySelector("#btnHdrRecPause")?.addEventListener("click", () => {
-            MacroRecorder.insertPause(12);
+            MacroRecorder.addSleepFrames(12);
             updateRecordingPill();
         });
         header.querySelector("#btnHdrRecStop")?.addEventListener("click", () => {
@@ -222,10 +222,11 @@ const AppUI = (() => {
     function snapshotScrollState(root) {
         const saved = [];
         if (!root?.querySelectorAll) return saved;
-        const els = root.querySelectorAll(".switcher-main, .pane-body, .inspector-body, .busmap-table-wrap, .start-page, .drawer-scroll, .ss-preset-tray");
+        const els = root.querySelectorAll(".switcher-main, .sw-block-body, .pane-body, .inspector-body, .busmap-table-wrap, .start-page, .drawer-scroll, .ss-preset-tray");
         els.forEach((el, idx) => {
             if (el.scrollTop > 0 || el.scrollLeft > 0) {
-                saved.push({ cls: el.className, idx, top: el.scrollTop, left: el.scrollLeft });
+                const blockId = el.closest?.("[data-block-id]")?.dataset?.blockId || null;
+                saved.push({ cls: el.className, idx, blockId, top: el.scrollTop, left: el.scrollLeft });
             }
         });
         return saved;
@@ -233,10 +234,17 @@ const AppUI = (() => {
 
     function restoreScrollState(root, saved) {
         if (!root?.querySelectorAll || !saved?.length) return;
-        const els = root.querySelectorAll(".switcher-main, .pane-body, .inspector-body, .busmap-table-wrap, .start-page, .drawer-scroll, .ss-preset-tray");
+        const els = root.querySelectorAll(".switcher-main, .sw-block-body, .pane-body, .inspector-body, .busmap-table-wrap, .start-page, .drawer-scroll, .ss-preset-tray");
         saved.forEach(item => {
-            const target = els[item.idx];
-            if (target && target.className === item.cls) {
+            let target = null;
+            if (item.blockId && item.cls.includes("sw-block-body")) {
+                target = root.querySelector(`[data-block-id="${item.blockId}"] > .sw-block-body`);
+            }
+            if (!target) {
+                const byIdx = els[item.idx];
+                if (byIdx && byIdx.className === item.cls) target = byIdx;
+            }
+            if (target) {
                 target.scrollTop = item.top;
                 target.scrollLeft = item.left;
             }
@@ -303,7 +311,8 @@ const AppUI = (() => {
     }
 
     const FAST_TICK_REASONS = new Set([
-        "transitionAutoFrame", "dskAutoFrame", "ftbFrame", "flyKeyFrame",
+        "transitionAutoFrame", "transitionAutoStart", "dskAutoFrame", "dskAutoStart",
+        "ftbFrame", "ftbStart", "flyKeyFrame",
         "transitionPosition", "layerPos", "layerSize", "layerCrop", "layerMask",
         "lumaClip", "lumaGain", "linearClip", "linearGain",
         "chromaColor", "chromaCorrection", "chromaSpill",
@@ -343,20 +352,7 @@ const AppUI = (() => {
         document.addEventListener("keydown", (e) => {
             const typing = isTextFocused();
 
-            // Undo / Redo (Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z)
-            if ((e.ctrlKey || e.metaKey) && !e.altKey && !typing) {
-                const k = e.key.toLowerCase();
-                if (k === "z" && !e.shiftKey) {
-                    e.preventDefault();
-                    HistoryManager.undo();
-                    return;
-                }
-                if (k === "y" || (k === "z" && e.shiftKey)) {
-                    e.preventDefault();
-                    HistoryManager.redo();
-                    return;
-                }
-            }
+            // Note: Undo / Redo (Ctrl/Cmd+Z, Ctrl/Cmd+Y) is bound once in HistoryManager.init()
 
             if (typing) return;
 
@@ -387,12 +383,20 @@ const AppUI = (() => {
             if (activeView === "switcher" && !e.ctrlKey && !e.metaKey && !e.altKey) {
                 if (e.code === "Space") {
                     e.preventDefault();
-                    SwitcherEngine.performTransitionCut(activeME);
+                    if (typeof ViewSwitcher !== "undefined" && typeof ViewSwitcher.triggerShortcutCut === "function") {
+                        ViewSwitcher.triggerShortcutCut();
+                    } else {
+                        SwitcherEngine.performTransitionCut(activeME, { record: true, emit: true });
+                    }
                     return;
                 }
                 if (e.key === "Enter") {
                     e.preventDefault();
-                    SwitcherEngine.performTransitionAuto(activeME);
+                    if (typeof ViewSwitcher !== "undefined" && typeof ViewSwitcher.triggerShortcutAuto === "function") {
+                        ViewSwitcher.triggerShortcutAuto();
+                    } else {
+                        SwitcherEngine.performTransitionAuto(activeME);
+                    }
                     return;
                 }
             }
@@ -433,10 +437,30 @@ const AppUI = (() => {
         });
     }
 
+    function consumeStartupParam() {
+        try {
+            if (typeof location === "undefined" || !location.search) return "";
+            const params = new URLSearchParams(location.search);
+            const raw = (params.get("startup") || "").trim().toLowerCase();
+            if (!["resume", "wizard", "blank"].includes(raw)) return "";
+            params.delete("startup");
+            const remaining = params.toString();
+            const cleanUrl = location.pathname + (remaining ? `?${remaining}` : "") + (location.hash || "");
+            if (typeof history !== "undefined" && typeof history.replaceState === "function") {
+                history.replaceState(null, "", cleanUrl);
+            }
+            return raw;
+        } catch {
+            return "";
+        }
+    }
+
     async function boot() {
         loadTheme();
         buildSources();
         initialiseResources();
+
+        const startupMode = consumeStartupParam();
 
         // Restore saved project from localStorage if present
         hasSavedOnBoot = typeof StateStorage !== "undefined" ? StateStorage.restoreConfigSync() : false;
@@ -471,20 +495,49 @@ const AppUI = (() => {
 
         // Subscribe to SwitcherEngine mutations
         SwitcherEngine.subscribe(({ reason }) => {
+            if (typeof CanvasRenderer !== "undefined" && typeof CanvasRenderer.syncLiveMediaClips === "function" && !FAST_TICK_REASONS.has(reason)) {
+                CanvasRenderer.syncLiveMediaClips();
+            }
             refresh(reason);
         });
 
-        // Choose landing view: Start Wizard unless user opted to skip & has a saved show
-        activeView = (hasSavedOnBoot && getSkipStart()) ? "switcher" : "start";
+        // Resolve initial landing view from Launcher Startup Mode (or saved skip-start preference)
+        let startupToast = null;
+        if (startupMode === "blank" && typeof ShowTemplates !== "undefined") {
+            ShowTemplates.applyShowTemplate("blank", {
+                projectName: "Untitled Show",
+                deviceProfile: state.deviceProfile || "ATEM Mini Pro"
+            });
+            hasSavedOnBoot = false;
+            activeView = "switcher";
+            startupToast = "Started new blank show.";
+        } else if (startupMode === "wizard") {
+            activeView = "start";
+        } else if (startupMode === "resume") {
+            if (hasSavedOnBoot) {
+                activeView = "switcher";
+            } else {
+                activeView = "start";
+                startupToast = "No saved show found to resume — opened Setup Wizard.";
+            }
+        } else {
+            activeView = (hasSavedOnBoot && getSkipStart()) ? "switcher" : "start";
+        }
 
         renderShell();
         renderActiveView();
         bindGlobalShortcuts();
+        if (startupToast) toast(startupToast, "info");
 
-        // Load IndexedDB media & thumbnails asynchronously
-        if (typeof StateStorage !== "undefined") {
+        // Load IndexedDB media & thumbnails asynchronously (skip stale media when launching a fresh blank show)
+        if (startupMode !== "blank" && typeof StateStorage !== "undefined") {
             const loaded = await StateStorage.restoreBinaryAssets();
-            if (loaded) refresh("assetsLoaded");
+            if (loaded) {
+                if (typeof CanvasRenderer !== "undefined" && typeof CanvasRenderer.syncLiveMediaClips === "function") {
+                    CanvasRenderer.syncLiveMediaClips({ triggerStart: false });
+                }
+                refresh("assetsLoaded");
+            }
         }
     }
 

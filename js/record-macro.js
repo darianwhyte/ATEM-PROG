@@ -18,190 +18,208 @@ const MacroRecorder = (() => {
     }
 
     // =========================================================================
-    // SNAPSHOT GENERATOR
+    // SNAPSHOT GENERATOR (Supports both legacy boolean flags & granular per-item options)
     // =========================================================================
 
-    function captureSnapshot(slotIndex, name, description = "", options = {}) {
-        MacroEngine.ensureMacroPool();
-
-        if (!MacroEngine.isValidMacroSlot(slotIndex)) {
-            throw new RangeError(`Invalid macro slot: ${slotIndex}`);
-        }
-
+    function buildSnapshotOps(options = {}) {
         const settings = {
             mixEffects: true,
             superSource: true,
             downstreamKeyers: true,
             outputs: true,
             stageToPreview: true,
+            // Granular selectors (when provided, override the broad category flags):
+            // meItems: { [meResourceId]: { bus: bool, trans: bool, usks: [0, 1, ...] } }
+            // ssItems: { [ssResourceId]: { art: bool, boxes: [0, 1, 2, 3] } }
+            // dskIndices: [0, 1, ...]
+            // auxChannels: [1, 2, ...]
+            // Detail toggles:
+            uskFullParams: true,
+            ssFullParams: true,
+            dskFullParams: true,
             ...options
         };
 
-        const profile = getProfile();
+        const profile = getProfile() || {};
         const ops = [];
 
-        if (settings.mixEffects) {
-            const maxUsks = getUpstreamKeyersPerME(profile);
+        // 1. Mix / Effects & Upstream Keyers
+        const maxUsks = getUpstreamKeyersPerME(profile);
+        const availableMEs = state.workspaces.filter(w => w.type === "me" && isWorkspaceAvailable(w));
 
-            state.workspaces
-                .filter(w => w.type === "me" && isWorkspaceAvailable(w))
-                .forEach(me => {
-                    const meIdx = String(me.resourceId);
-                    const common = { mixEffectBlockIndex: meIdx };
+        availableMEs.forEach(me => {
+            let includeBus = false;
+            let includeTrans = false;
+            let selectedUsks = [];
 
-                    pushOp(
-                        ops,
-                        settings.stageToPreview ? "PreviewInput" : "ProgramInput",
-                        {
-                            ...common,
-                            source: MacroEngine.mapSourceToAtemString(
-                                settings.stageToPreview ? (me.data.previewSource ?? me.data.source) : me.data.source
-                            )
-                        }
-                    );
+            if (settings.meItems && typeof settings.meItems === "object") {
+                const cfg = settings.meItems[me.resourceId];
+                if (!cfg) return;
+                includeBus = !!cfg.bus;
+                includeTrans = !!cfg.trans;
+                selectedUsks = Array.isArray(cfg.usks) ? cfg.usks : [];
+            } else if (settings.mixEffects) {
+                includeBus = true;
+                includeTrans = true;
+                selectedUsks = Array.from({ length: maxUsks }, (_, i) => i);
+            } else {
+                return;
+            }
 
-                    const nt = me.data.nextTransition || { bkgd: true, usk: [false, false, false, false] };
-                    const selectionMask = [
-                        nt.bkgd ? "Background" : null,
-                        nt.usk[0] ? "Key1" : null,
-                        nt.usk[1] ? "Key2" : null,
-                        nt.usk[2] ? "Key3" : null,
-                        nt.usk[3] ? "Key4" : null
-                    ].filter(Boolean).join(", ") || "Background";
+            const meIdx = String(me.resourceId);
+            const common = { mixEffectBlockIndex: meIdx };
 
-                    pushOp(ops, "TransitionStyle", {
-                        ...common,
-                        style: me.data.transitionStyle || "Mix",
-                        rate: String(me.data.transitionRate || 25)
+            if (includeBus) {
+                const targetOpId = settings.stageToPreview ? "PreviewInput" : "ProgramInput";
+                // When staging current look to Preview, use the live Program source (falling back to Preview if PGM is blank)
+                // unless caller explicitly asks to read from previewSource.
+                const capturedSource = settings.stageToPreview
+                    ? (settings.previewFromPreviewBus ? (me.data.previewSource ?? me.data.source) : (me.data.source || me.data.previewSource || ""))
+                    : (me.data.source || "");
+                pushOp(ops, targetOpId, {
+                    ...common,
+                    source: MacroEngine.mapSourceToAtemString(capturedSource)
+                });
+            }
+
+            if (includeTrans) {
+                const nt = me.data.nextTransition || { bkgd: true, usk: [false, false, false, false] };
+                const selectionMask = [
+                    nt.bkgd ? "Background" : null,
+                    nt.usk[0] ? "Key1" : null,
+                    nt.usk[1] ? "Key2" : null,
+                    nt.usk[2] ? "Key3" : null,
+                    nt.usk[3] ? "Key4" : null
+                ].filter(Boolean).join(", ") || "Background";
+
+                pushOp(ops, "TransitionStyle", {
+                    ...common,
+                    style: me.data.transitionStyle || "Mix",
+                    rate: String(me.data.transitionRate || 25)
+                });
+
+                pushOp(ops, "TransitionSelection", {
+                    ...common,
+                    selection: selectionMask
+                });
+            }
+
+            const uskSet = new Set(selectedUsks.map(Number));
+            me.data.usk?.slice(0, maxUsks).forEach((usk, index) => {
+                if (!uskSet.has(index)) return;
+                const uskIdx = String(index);
+                const target = { ...common, upstreamKeyerIndex: uskIdx };
+                const hasDVE = usk.keyType === "dve" || usk.flyingKey;
+                const keySource = usk.keySettings?.[usk.keyType]?.keySource;
+
+                pushOp(ops, "UpstreamKeyerFillInput", {
+                    ...target,
+                    source: MacroEngine.mapSourceToAtemString(usk.source)
+                });
+
+                if (settings.uskFullParams) {
+                    pushOp(ops, "UpstreamKeyerType", {
+                        ...target,
+                        type: getAtemKeyType(usk.keyType)
                     });
 
-                    pushOp(ops, "TransitionSelection", {
-                        ...common,
-                        selection: selectionMask
+                    pushOp(ops, "UpstreamKeyerKeyInput", {
+                        ...target,
+                        source: MacroEngine.mapSourceToAtemString(keySource || usk.source)
                     });
 
-                    me.data.usk?.slice(0, maxUsks).forEach((usk, index) => {
-                        const uskIdx = String(index);
-                        const target = { ...common, upstreamKeyerIndex: uskIdx };
-                        const hasDVE = usk.keyType === "dve" || usk.flyingKey;
-                        const keySource = usk.keySettings?.[usk.keyType]?.keySource;
+                    if (usk.keyType === "luma") {
+                        pushOp(ops, "UpstreamKeyerLumaClip", { ...target, clip: String((usk.keySettings.luma.clip ?? 50) * 10) });
+                        pushOp(ops, "UpstreamKeyerLumaGain", { ...target, gain: String((usk.keySettings.luma.gain ?? 50) * 10) });
+                        pushOp(ops, "UpstreamKeyerLumaInvert", { ...target, invert: usk.keySettings.luma.invert ? "True" : "False" });
+                    } else if (usk.keyType === "linear") {
+                        pushOp(ops, "UpstreamKeyerLinearPremultiplied", { ...target, premultiplied: usk.keySettings.linear.premultiplied ? "True" : "False" });
+                        pushOp(ops, "UpstreamKeyerLinearClip", { ...target, clip: String((usk.keySettings.linear.clip ?? 50) * 10) });
+                        pushOp(ops, "UpstreamKeyerLinearGain", { ...target, gain: String((usk.keySettings.linear.gain ?? 50) * 10) });
+                    } else if (usk.keyType === "chroma") {
+                        pushOp(ops, "UpstreamKeyerChromaHue", { ...target, sampleHue: String(Math.round((usk.keySettings.chroma.correction ?? 50) * 3.6)) });
+                        pushOp(ops, "UpstreamKeyerChromaSaturation", { ...target, sampleSaturation: String((usk.keySettings.chroma.spill ?? 50) * 10) });
+                    } else if (usk.keyType === "pattern") {
+                        pushOp(ops, "UpstreamKeyerPatternStyle", { ...target, pattern: usk.keySettings.pattern.pattern ?? "box" });
+                        pushOp(ops, "UpstreamKeyerPatternSize", { ...target, size: String((usk.keySettings.pattern.size ?? 50) * 100) });
+                        pushOp(ops, "UpstreamKeyerPatternSoftness", { ...target, softness: String((usk.keySettings.pattern.softness ?? 0) * 100) });
+                        pushOp(ops, "UpstreamKeyerPatternXPosition", { ...target, xPosition: String((usk.keySettings.pattern.x ?? 0) * 100) });
+                        pushOp(ops, "UpstreamKeyerPatternYPosition", { ...target, yPosition: String((usk.keySettings.pattern.y ?? 0) * 100) });
+                    }
 
-                        pushOp(ops, "UpstreamKeyerType", {
-                            ...target,
-                            type: getAtemKeyType(usk.keyType)
-                        });
+                    pushOp(ops, "UpstreamKeyerMaskEnabled", {
+                        ...target,
+                        enabled: usk.maskEnabled ? "True" : "False"
+                    });
 
-                        pushOp(ops, "UpstreamKeyerFillInput", {
-                            ...target,
-                            source: MacroEngine.mapSourceToAtemString(usk.source)
-                        });
+                    if (usk.maskEnabled) {
+                        pushOp(ops, "UpstreamKeyerMaskTop", { ...target, top: String(usk.maskTop || 0) });
+                        pushOp(ops, "UpstreamKeyerMaskBottom", { ...target, bottom: String(usk.maskBottom || 0) });
+                        pushOp(ops, "UpstreamKeyerMaskLeft", { ...target, left: String(usk.maskLeft || 0) });
+                        pushOp(ops, "UpstreamKeyerMaskRight", { ...target, right: String(usk.maskRight || 0) });
+                    }
 
-                        pushOp(ops, "UpstreamKeyerKeyInput", {
-                            ...target,
-                            source: MacroEngine.mapSourceToAtemString(keySource || usk.source)
-                        });
+                    pushOp(ops, "UpstreamKeyerFlyEnabled", {
+                        ...target,
+                        enabled: hasDVE ? "True" : "False"
+                    });
 
-                                    // Inside captureSnapshot USK loop (right after UpstreamKeyerKeyInput):
-                        if (usk.keyType === "luma") {
-                            pushOp(ops, "UpstreamKeyerLumaClip", { ...target, clip: String((usk.keySettings.luma.clip ?? 50) * 10) });
-                            pushOp(ops, "UpstreamKeyerLumaGain", { ...target, gain: String((usk.keySettings.luma.gain ?? 50) * 10) });
-                            pushOp(ops, "UpstreamKeyerLumaInvert", { ...target, invert: usk.keySettings.luma.invert ? "True" : "False" });
-                        } else if (usk.keyType === "linear") {
-                            pushOp(ops, "UpstreamKeyerLinearPremultiplied", { ...target, premultiplied: usk.keySettings.linear.premultiplied ? "True" : "False" });
-                            pushOp(ops, "UpstreamKeyerLinearClip", { ...target, clip: String((usk.keySettings.linear.clip ?? 50) * 10) });
-                            pushOp(ops, "UpstreamKeyerLinearGain", { ...target, gain: String((usk.keySettings.linear.gain ?? 50) * 10) });
-                        } else if (usk.keyType === "chroma") {
-                            pushOp(ops, "UpstreamKeyerChromaHue", { ...target, sampleHue: String(Math.round((usk.keySettings.chroma.correction ?? 50) * 3.6)) });
-                            pushOp(ops, "UpstreamKeyerChromaSaturation", { ...target, sampleSaturation: String((usk.keySettings.chroma.spill ?? 50) * 10) });
-                        } else if (usk.keyType === "pattern") {
-                            pushOp(ops, "UpstreamKeyerPatternStyle", { ...target, pattern: usk.keySettings.pattern.pattern ?? "box" });
-                            pushOp(ops, "UpstreamKeyerPatternSize", { ...target, size: String((usk.keySettings.pattern.size ?? 50) * 100) });
-                            pushOp(ops, "UpstreamKeyerPatternSoftness", { ...target, softness: String((usk.keySettings.pattern.softness ?? 0) * 100) });
-                            pushOp(ops, "UpstreamKeyerPatternXPosition", { ...target, xPosition: String((usk.keySettings.pattern.x ?? 0) * 100) });
-                            pushOp(ops, "UpstreamKeyerPatternYPosition", { ...target, yPosition: String((usk.keySettings.pattern.y ?? 0) * 100) });
-                        }
+                    if (hasDVE) {
+                        pushOp(ops, "UpstreamKeyerFlyPositionX", { ...target, positionX: (usk.x ?? 0).toFixed(2) });
+                        pushOp(ops, "UpstreamKeyerFlyPositionY", { ...target, positionY: (usk.y ?? 0).toFixed(2) });
+                        pushOp(ops, "UpstreamKeyerFlySizeX", { ...target, sizeX: (usk.size ?? 1).toFixed(2) });
+                        pushOp(ops, "UpstreamKeyerFlySizeY", { ...target, sizeY: (usk.size ?? 1).toFixed(2) });
 
-                        pushOp(ops, "UpstreamKeyerMaskEnabled", {
-                            ...target,
-                            enabled: usk.maskEnabled ? "True" : "False"
-                        });
+                        const dve = state.resources?.dves?.find(
+                            d => d.id === usk.dveId || d.assignedTo === usk.id
+                        );
 
-                        if (usk.maskEnabled) {
-                            pushOp(ops, "UpstreamKeyerMaskTop", {
-                                ...target, top: String(usk.maskTop || 0)
-                            });
-                            pushOp(ops, "UpstreamKeyerMaskBottom", {
-                                ...target, bottom: String(usk.maskBottom || 0)
-                            });
-                            pushOp(ops, "UpstreamKeyerMaskLeft", {
-                                ...target, left: String(usk.maskLeft || 0)
-                            });
-                            pushOp(ops, "UpstreamKeyerMaskRight", {
-                                ...target, right: String(usk.maskRight || 0)
-                            });
-                        }
-
-                        pushOp(ops, "UpstreamKeyerFlyEnabled", {
-                            ...target,
-                            enabled: hasDVE ? "True" : "False"
-                        });
-
-                        if (hasDVE) {
-                            pushOp(ops, "UpstreamKeyerFlyPositionX", {
-                                ...target, positionX: (usk.x ?? 0).toFixed(2)
-                            });
-                            pushOp(ops, "UpstreamKeyerFlyPositionY", {
-                                ...target, positionY: (usk.y ?? 0).toFixed(2)
-                            });
-                            pushOp(ops, "UpstreamKeyerFlySizeX", {
-                                ...target, sizeX: (usk.size ?? 1).toFixed(2)
-                            });
-                            pushOp(ops, "UpstreamKeyerFlySizeY", {
-                                ...target, sizeY: (usk.size ?? 1).toFixed(2)
+                        if (dve) {
+                            pushOp(ops, "UpstreamKeyerDVECropEnabled", {
+                                ...target,
+                                enabled: dve.cropEnabled ? "True" : "False"
                             });
 
-                            const dve = state.resources?.dves?.find(
-                                d => d.id === usk.dveId || d.assignedTo === usk.id
-                            );
-
-                            if (dve) {
-                                pushOp(ops, "UpstreamKeyerDVECropEnabled", {
-                                    ...target,
-                                    enabled: dve.cropEnabled ? "True" : "False"
-                                });
-
-                                if (dve.cropEnabled) {
-                                    pushOp(ops, "UpstreamKeyerDVECropTop", {
-                                        ...target, top: String(dve.cropTop || 0)
-                                    });
-                                    pushOp(ops, "UpstreamKeyerDVECropBottom", {
-                                        ...target, bottom: String(dve.cropBottom || 0)
-                                    });
-                                    pushOp(ops, "UpstreamKeyerDVECropLeft", {
-                                        ...target, left: String(dve.cropLeft || 0)
-                                    });
-                                    pushOp(ops, "UpstreamKeyerDVECropRight", {
-                                        ...target, right: String(dve.cropRight || 0)
-                                    });
-                                }
+                            if (dve.cropEnabled) {
+                                pushOp(ops, "UpstreamKeyerDVECropTop", { ...target, top: String(dve.cropTop || 0) });
+                                pushOp(ops, "UpstreamKeyerDVECropBottom", { ...target, bottom: String(dve.cropBottom || 0) });
+                                pushOp(ops, "UpstreamKeyerDVECropLeft", { ...target, left: String(dve.cropLeft || 0) });
+                                pushOp(ops, "UpstreamKeyerDVECropRight", { ...target, right: String(dve.cropRight || 0) });
                             }
                         }
+                    }
+                }
 
-                        pushOp(ops, "UpstreamKeyerEnabled", {
-                            ...target,
-                            enabled: usk.enabled ? "True" : "False"
-                        });
-                    });
+                pushOp(ops, "UpstreamKeyerEnabled", {
+                    ...target,
+                    enabled: usk.enabled ? "True" : "False"
                 });
-        }
+            });
+        });
 
-        if (settings.superSource && profile.superSource > 0) {
-            state.workspaces
-                .filter(w => w.type === "superSource" && isWorkspaceAvailable(w))
-                .forEach(ss => {
-                    const ssIdx = String(ss.resourceId);
-                    const common = { superSourceIndex: ssIdx };
+        // 2. SuperSource Layouts & Art
+        if (profile.superSource > 0) {
+            const availableSS = state.workspaces.filter(w => w.type === "superSource" && isWorkspaceAvailable(w));
+            availableSS.forEach(ss => {
+                let includeArt = false;
+                let selectedBoxes = [];
 
+                if (settings.ssItems && typeof settings.ssItems === "object") {
+                    const cfg = settings.ssItems[ss.resourceId];
+                    if (!cfg) return;
+                    includeArt = !!cfg.art;
+                    selectedBoxes = Array.isArray(cfg.boxes) ? cfg.boxes : [];
+                } else if (settings.superSource) {
+                    includeArt = true;
+                    selectedBoxes = [0, 1, 2, 3];
+                } else {
+                    return;
+                }
+
+                const ssIdx = String(ss.resourceId);
+                const common = { superSourceIndex: ssIdx };
+
+                if (includeArt) {
                     pushOp(ops, "SuperSourceArtFillInput", {
                         ...common,
                         source: MacroEngine.mapSourceToAtemString(ss.data.artSource)
@@ -214,96 +232,82 @@ const MacroRecorder = (() => {
                         ...common,
                         place: ss.data.artPlace || "Background"
                     });
-                    pushOp(ops, "SuperSourceArtPremultiplied", {
-                        ...common,
-                        premultiplied: ss.data.artPremultiplied ? "True" : "False"
-                    });
-                    pushOp(ops, "SuperSourceArtClip", {
-                        ...common,
-                        clip: String((ss.data.artClip ?? 50) * 10)
-                    });
-                    pushOp(ops, "SuperSourceArtGain", {
-                        ...common,
-                        gain: String((ss.data.artGain ?? 50) * 10)
-                    });
-                    pushOp(ops, "SuperSourceArtInvert", {
-                        ...common,
-                        invert: ss.data.artInvert ? "True" : "False"
-                    });
+                    if (settings.ssFullParams) {
+                        pushOp(ops, "SuperSourceArtPremultiplied", {
+                            ...common,
+                            premultiplied: ss.data.artPremultiplied ? "True" : "False"
+                        });
+                        pushOp(ops, "SuperSourceArtClip", { ...common, clip: String((ss.data.artClip ?? 50) * 10) });
+                        pushOp(ops, "SuperSourceArtGain", { ...common, gain: String((ss.data.artGain ?? 50) * 10) });
+                        pushOp(ops, "SuperSourceArtInvert", { ...common, invert: ss.data.artInvert ? "True" : "False" });
+                    }
+                }
 
-                    ss.data.boxes?.forEach((box, index) => {
-                        const target = { ...common, boxIndex: String(index) };
+                const boxSet = new Set(selectedBoxes.map(Number));
+                ss.data.boxes?.forEach((box, index) => {
+                    if (!boxSet.has(index)) return;
+                    const target = { ...common, boxIndex: String(index) };
 
-                        pushOp(ops, "SuperSourceBoxSource", {
-                            ...target,
-                            source: MacroEngine.mapSourceToAtemString(box.source)
-                        });
-                        pushOp(ops, "SuperSourceBoxPositionX", {
-                            ...target, positionX: (box.x ?? 0).toFixed(2)
-                        });
-                        pushOp(ops, "SuperSourceBoxPositionY", {
-                            ...target, positionY: (box.y ?? 0).toFixed(2)
-                        });
-                        pushOp(ops, "SuperSourceBoxSize", {
-                            ...target, size: (box.size ?? 0.5).toFixed(2)
-                        });
+                    pushOp(ops, "SuperSourceBoxSource", {
+                        ...target,
+                        source: MacroEngine.mapSourceToAtemString(box.source)
+                    });
+                    pushOp(ops, "SuperSourceBoxPositionX", { ...target, positionX: (box.x ?? 0).toFixed(2) });
+                    pushOp(ops, "SuperSourceBoxPositionY", { ...target, positionY: (box.y ?? 0).toFixed(2) });
+                    pushOp(ops, "SuperSourceBoxSize", { ...target, size: (box.size ?? 0.5).toFixed(2) });
+
+                    if (settings.ssFullParams) {
                         pushOp(ops, "SuperSourceBoxCropEnabled", {
                             ...target,
                             enabled: box.cropEnabled ? "True" : "False"
                         });
-
                         if (box.cropEnabled) {
-                            pushOp(ops, "SuperSourceBoxCropTop", {
-                                ...target, top: String(box.cropTop || 0)
-                            });
-                            pushOp(ops, "SuperSourceBoxCropBottom", {
-                                ...target, bottom: String(box.cropBottom || 0)
-                            });
-                            pushOp(ops, "SuperSourceBoxCropLeft", {
-                                ...target, left: String(box.cropLeft || 0)
-                            });
-                            pushOp(ops, "SuperSourceBoxCropRight", {
-                                ...target, right: String(box.cropRight || 0)
-                            });
+                            pushOp(ops, "SuperSourceBoxCropTop", { ...target, top: String(box.cropTop || 0) });
+                            pushOp(ops, "SuperSourceBoxCropBottom", { ...target, bottom: String(box.cropBottom || 0) });
+                            pushOp(ops, "SuperSourceBoxCropLeft", { ...target, left: String(box.cropLeft || 0) });
+                            pushOp(ops, "SuperSourceBoxCropRight", { ...target, right: String(box.cropRight || 0) });
                         }
-
-                        pushOp(ops, "SuperSourceBoxBorderEnabled", {
-                            ...target,
-                            enabled: box.borderEnabled ? "True" : "False"
-                        });
-
-                        if (box.borderEnabled) {
-                            pushOp(ops, "SuperSourceBoxBorderWidth", {
+                        if (profile.supportsBoxBorders !== false) {
+                            pushOp(ops, "SuperSourceBoxBorderEnabled", {
                                 ...target,
-                                width: String(box.borderWidth ?? 2)
+                                enabled: box.borderEnabled ? "True" : "False"
                             });
-                            pushOp(ops, "SuperSourceBoxBorderColor", {
-                                ...target,
-                                color: box.borderColor || "#ffffff"
-                            });
+                            if (box.borderEnabled) {
+                                pushOp(ops, "SuperSourceBoxBorderWidth", { ...target, width: String(box.borderWidth ?? 2) });
+                                pushOp(ops, "SuperSourceBoxBorderColor", { ...target, color: box.borderColor || "#ffffff" });
+                            }
                         }
+                    }
 
-                        pushOp(ops, "SuperSourceBoxEnabled", {
-                            ...target,
-                            enabled: box.enabled ? "True" : "False"
-                        });
+                    pushOp(ops, "SuperSourceBoxEnabled", {
+                        ...target,
+                        enabled: box.enabled ? "True" : "False"
                     });
                 });
+            });
         }
 
-        if (settings.downstreamKeyers) {
-            getAvailableDSKs().forEach((dsk, dskIdx) => {
-                const target = { downstreamKeyerIndex: String(dskIdx) };
-                const dskActive = getActiveDSKSettings(dsk);
+        // 3. Downstream Keyers
+        const availableDSKs = getAvailableDSKs();
+        const dskSet = Array.isArray(settings.dskIndices)
+            ? new Set(settings.dskIndices.map(Number))
+            : (settings.downstreamKeyers ? new Set(availableDSKs.map((_, i) => i)) : new Set());
 
-                pushOp(ops, "DownstreamKeyerFillInput", {
-                    ...target,
-                    source: MacroEngine.mapSourceToAtemString(dsk.source)
-                });
-                pushOp(ops, "DownstreamKeyerKeyInput", {
-                    ...target,
-                    source: MacroEngine.mapSourceToAtemString(dsk.keySource || dsk.source)
-                });
+        availableDSKs.forEach((dsk, dskIdx) => {
+            if (!dskSet.has(dskIdx)) return;
+            const target = { downstreamKeyerIndex: String(dskIdx) };
+            const dskActive = getActiveDSKSettings(dsk);
+
+            pushOp(ops, "DownstreamKeyerFillInput", {
+                ...target,
+                source: MacroEngine.mapSourceToAtemString(dsk.source)
+            });
+            pushOp(ops, "DownstreamKeyerKeyInput", {
+                ...target,
+                source: MacroEngine.mapSourceToAtemString(dsk.keySource || dsk.source)
+            });
+
+            if (settings.dskFullParams) {
                 pushOp(ops, "DownstreamKeyerPremultiplied", {
                     ...target,
                     premultiplied: dsk.keySettings.linear.premultiplied ? "True" : "False"
@@ -311,7 +315,6 @@ const MacroRecorder = (() => {
                 pushOp(ops, "DownstreamKeyerClip", { ...target, clip: String((dskActive.clip ?? 50) * 10) });
                 pushOp(ops, "DownstreamKeyerGain", { ...target, gain: String((dskActive.gain ?? 50) * 10) });
                 pushOp(ops, "DownstreamKeyerInvert", { ...target, invert: dskActive.invert ? "True" : "False" });
-                pushOp(ops, "DownstreamKeyerTie", { ...target, tie: dsk.tie ? "True" : "False" });
                 pushOp(ops, "DownstreamKeyerRate", { ...target, rate: String(dsk.rate || 25) });
                 pushOp(ops, "DownstreamKeyerMaskEnabled", { ...target, enabled: dsk.maskEnabled ? "True" : "False" });
                 if (dsk.maskEnabled) {
@@ -320,21 +323,40 @@ const MacroRecorder = (() => {
                     pushOp(ops, "DownstreamKeyerMaskLeft", { ...target, left: String(dsk.maskLeft || 0) });
                     pushOp(ops, "DownstreamKeyerMaskRight", { ...target, right: String(dsk.maskRight || 0) });
                 }
-                pushOp(ops, "DownstreamKeyerOnAir", {
-                    ...target,
-                    enabled: dsk.enabled ? "True" : "False"
-                });
-            });
-        }
+            }
 
-        if (settings.outputs && profile.assignableOutputs > 0) {
-            for (let number = 1; number <= profile.assignableOutputs; number++) {
+            pushOp(ops, "DownstreamKeyerTie", { ...target, tie: dsk.tie ? "True" : "False" });
+            pushOp(ops, "DownstreamKeyerOnAir", {
+                ...target,
+                enabled: dsk.enabled ? "True" : "False"
+            });
+        });
+
+        // 4. Aux / Assignable Outputs
+        if (profile.assignableOutputs > 0) {
+            const auxList = Array.isArray(settings.auxChannels)
+                ? settings.auxChannels.map(Number).filter(ch => ch >= 1 && ch <= profile.assignableOutputs)
+                : (settings.outputs ? Array.from({ length: profile.assignableOutputs }, (_, i) => i + 1) : []);
+
+            auxList.forEach(number => {
                 pushOp(ops, "AuxiliaryInput", {
                     auxiliaryIndex: String(number - 1),
                     source: MacroEngine.mapSourceToAtemString(getOutputData(number).source)
                 });
-            }
+            });
         }
+
+        return ops;
+    }
+
+    function captureSnapshot(slotIndex, name, description = "", options = {}) {
+        MacroEngine.ensureMacroPool();
+
+        if (!MacroEngine.isValidMacroSlot(slotIndex)) {
+            throw new RangeError(`Invalid macro slot: ${slotIndex}`);
+        }
+
+        const ops = buildSnapshotOps(options);
 
         const macro = {
             index: slotIndex,
@@ -549,6 +571,7 @@ const MacroRecorder = (() => {
         return macro;
     }
     return {
+        buildSnapshotOps,
         captureSnapshot,
         startRecording,
         startAppendRecording,

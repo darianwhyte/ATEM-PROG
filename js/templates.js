@@ -396,8 +396,9 @@ const ShowTemplates = (() => {
             }
         });
 
-        // Apply Bus Follow recipes (only if hardware has those outputs & inputs)
-        if (options.enableRecipes !== false) {
+        // Apply Bus Follow recipes (only on Constellation models that support ATEM 10.2 Bus Mapping)
+        const canBusMap = typeof supportsBusMapping === "function" ? supportsBusMapping(profile) : true;
+        if (canBusMap && options.enableRecipes !== false) {
             (tpl.busFollow || []).forEach(bf => {
                 if (bf.targetType === "aux" && bf.targetId > maxOut) return;
                 const p = { ...(bf.params || {}) };
@@ -418,7 +419,7 @@ const ShowTemplates = (() => {
             const preset = BUILT_IN_SS_PRESETS.find(p => p.id === tpl.ssPreset);
             if (preset) applySSPreset(ss1, preset);
             (tpl.ssBoxes || []).forEach((srcId, i) => {
-                if (ss1.data.boxes[i] && isSourceValidForDestination("superSource", srcId, ss1)) {
+                if (ss1.data.boxes[i] && isSourceValidForDestination("superSourceBox", srcId, ss1)) {
                     ss1.data.boxes[i].source = srcId;
                 }
             });

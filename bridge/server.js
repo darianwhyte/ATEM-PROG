@@ -218,7 +218,45 @@ const server = http.createServer((req, res) => {
     }
 });
 
-const wss = new WebSocketServer({ server });
+function isPrivateOrLocalHostname(hostname) {
+    const h = String(hostname || "").toLowerCase().replace(/^\[|\]$/g, "");
+    if (!h) return false;
+    if (h === "localhost" || h === "127.0.0.1" || h === "::1" || h.endsWith(".local")) return true;
+    const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!m) return false;
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    if (a === 10) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 169 && b === 254) return true;
+    return false;
+}
+
+function isAllowedWsOrigin(origin, hostHeader) {
+    // Allow non-browser / CLI / standalone file:// (Origin: "null" or omitted)
+    if (!origin || origin === "null") return true;
+    try {
+        const parsed = new URL(origin);
+        if (hostHeader && parsed.host.toLowerCase() === String(hostHeader).toLowerCase()) return true;
+        return isPrivateOrLocalHostname(parsed.hostname);
+    } catch {
+        return false;
+    }
+}
+
+const wss = new WebSocketServer({
+    server,
+    verifyClient: ({ req }, done) => {
+        const origin = req.headers?.origin;
+        const ok = isAllowedWsOrigin(origin, req.headers?.host);
+        if (!ok) {
+            addLog(`Blocked cross-origin WebSocket connection from ${origin}`);
+            done(false, 403, "Forbidden Origin");
+            return;
+        }
+        done(true);
+    }
+});
 const atem = new Atem();
 
 let currentIp = null;

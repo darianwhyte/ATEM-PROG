@@ -625,7 +625,7 @@ function getActiveLayer() {
 }
 
 function getActiveLayerElement() {
-    if (state.activeLayerId < 0) {
+    if (state.activeLayerId < 0 || typeof elements === "undefined") {
         return null;
     }
 
@@ -902,7 +902,7 @@ function isBoxLayer(layer) {
 
 function getDSKMode(dsk = getActiveDSK()) {
     if (!dsk) return "linear";
-    if (dsk.source === dsk.keySource) {
+    if (!dsk.keySource || dsk.source === dsk.keySource) {
         return "luma";
     }
     return "linear";

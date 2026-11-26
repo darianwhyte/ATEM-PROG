@@ -287,6 +287,14 @@ const profiles = {
 
 function getProfile() { return profiles[state.deviceProfile]; }
 
+function supportsBusMapping(profile = getProfile()) {
+    if (!profile) return false;
+    if (typeof profile.supportsBusMapping === "boolean") return profile.supportsBusMapping;
+    // ATEM 10.2 Bus Mapping is supported natively on the Constellation series
+    const matchName = Object.keys(profiles).find(k => profiles[k] === profile) || state.deviceProfile || "";
+    return /Constellation/i.test(matchName);
+}
+
 function getUpstreamKeyersPerME(profile = getProfile()) {
     if (!profile) return 1;
     const meCount = Math.max(1, profile.me || 1);

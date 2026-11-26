@@ -580,7 +580,7 @@ const AtemBridge = (() => {
         if (!a || typeof SwitcherEngine === "undefined") return;
         if (a.type === "setProgram") SwitcherEngine.setMEProgram(a.me ?? 0, a.source ?? "");
         else if (a.type === "setPreview") SwitcherEngine.setMEPreview(a.me ?? 0, a.source ?? "");
-        else if (a.type === "cut") SwitcherEngine.performTransitionCut(a.me ?? 0);
+        else if (a.type === "cut") SwitcherEngine.performTransitionCut(a.me ?? 0, { record: true, emit: true });
         else if (a.type === "auto") SwitcherEngine.performTransitionAuto(a.me ?? 0);
         else if (a.type === "ftb") SwitcherEngine.performFTB(a.me ?? 0);
         else if (a.type === "setAux") SwitcherEngine.setAuxSource(a.aux ?? 1, a.source ?? "");
@@ -606,39 +606,69 @@ const AtemBridge = (() => {
         }
 
         if (typeof SwitcherEngine === "undefined") return;
-        SwitcherEngine.subscribe(({ reason }) => {
-            if (bridgeOpen && reason !== "transitionAutoFrame" && reason !== "dskAutoFrame") {
+        const TRANSIENT_REASONS = new Set([
+            "transitionAutoFrame", "dskAutoFrame",
+            "transitionAutoStart", "dskAutoStart", "ftbStart"
+        ]);
+        SwitcherEngine.subscribe((ev) => {
+            const reason = ev?.reason;
+            if (bridgeOpen && !TRANSIENT_REASONS.has(reason)) {
                 schedulePublishStudioState();
             }
             if (!liveSyncEnabled || !atemConnected || _applyingHardwareEcho) return;
-            const meIdx = (typeof AppUI !== "undefined" && Number.isInteger(AppUI.activeME)) ? AppUI.activeME : 0;
-            const meWs = state.workspaces.find(w => w.type === "me" && w.resourceId === meIdx);
-            if (!meWs) return;
 
-            if (reason === "meProgram") {
+            const meIdx = Number.isInteger(ev?.me)
+                ? ev.me
+                : ((typeof AppUI !== "undefined" && Number.isInteger(AppUI.activeME)) ? AppUI.activeME : 0);
+            const meWs = state.workspaces.find(w => w.type === "me" && w.resourceId === meIdx);
+
+            if (reason === "meProgram" && meWs) {
                 send({ cmd: "setProgram", me: meIdx, input: AtemXml.sourceIdToAtemNumeric(meWs.data.source) });
-            } else if (reason === "mePreview") {
+            } else if (reason === "mePreview" && meWs) {
                 send({ cmd: "setPreview", me: meIdx, input: AtemXml.sourceIdToAtemNumeric(meWs.data.previewSource) });
-            } else if (reason === "transitionCut") {
+            } else if (reason === "transitionCut" && meWs) {
                 send({ cmd: "cut", me: meIdx });
-            } else if (reason === "transitionAutoDone") {
+            } else if (reason === "transitionAutoStart" && meWs) {
                 send({ cmd: "auto", me: meIdx });
-            } else if (reason === "ftbDone") {
+            } else if (reason === "ftbStart" && meWs) {
                 send({ cmd: "ftb", me: meIdx });
             } else if (reason === "dskEnabled") {
-                const dsk = getActiveDSK();
+                const dsk = Number.isInteger(ev?.dsk) ? getDSK(ev.dsk) : getActiveDSK();
                 if (dsk) send({ cmd: "setDSKOnAir", dsk: dsk.id, onAir: dsk.enabled });
             } else if (reason === "dskTie") {
-                const dsk = getActiveDSK();
+                const dsk = Number.isInteger(ev?.dsk) ? getDSK(ev.dsk) : getActiveDSK();
                 if (dsk) send({ cmd: "setDSKTie", dsk: dsk.id, tie: dsk.tie });
-            } else if (reason === "dskAutoDone") {
-                const dsk = getActiveDSK();
+            } else if (reason === "dskAutoStart") {
+                const dsk = Number.isInteger(ev?.dsk) ? getDSK(ev.dsk) : getActiveDSK();
                 if (dsk) send({ cmd: "autoDSK", dsk: dsk.id });
+            } else if (reason === "layerEnabled") {
+                if (Number.isInteger(ev?.me) && Number.isInteger(ev?.usk)) {
+                    const usk = meWs?.data?.usk?.[ev.usk];
+                    if (usk) send({ cmd: "setUSKOnAir", me: ev.me, usk: ev.usk, onAir: !!usk.enabled });
+                } else if (Number.isInteger(ev?.ss) && Number.isInteger(ev?.box)) {
+                    const ssWs = state.workspaces.find(w => w.type === "superSource" && w.resourceId === ev.ss);
+                    const box = ssWs?.data?.boxes?.[ev.box];
+                    if (box) send({ cmd: "setSSBox", ss: ev.ss, box: ev.box, enabled: !!box.enabled });
+                }
+            } else if (reason === "layerSource") {
+                if (Number.isInteger(ev?.me) && Number.isInteger(ev?.usk)) {
+                    const usk = meWs?.data?.usk?.[ev.usk];
+                    if (usk) send({ cmd: "setUSKFill", me: ev.me, usk: ev.usk, input: AtemXml.sourceIdToAtemNumeric(usk.source) });
+                } else if (Number.isInteger(ev?.ss) && Number.isInteger(ev?.box)) {
+                    const ssWs = state.workspaces.find(w => w.type === "superSource" && w.resourceId === ev.ss);
+                    const box = ssWs?.data?.boxes?.[ev.box];
+                    if (box) send({ cmd: "setSSBox", ss: ev.ss, box: ev.box, source: AtemXml.sourceIdToAtemNumeric(box.source) });
+                }
             } else if (reason === "auxSource") {
-                const profile = getProfile() || {};
-                for (let a = 1; a <= (profile.assignableOutputs || 0); a++) {
-                    const out = state.outputs?.[a];
-                    if (out) send({ cmd: "setAux", aux: a - 1, input: AtemXml.sourceIdToAtemNumeric(out.source) });
+                if (Number.isInteger(ev?.aux)) {
+                    const out = state.outputs?.[ev.aux];
+                    if (out) send({ cmd: "setAux", aux: ev.aux - 1, input: AtemXml.sourceIdToAtemNumeric(out.source) });
+                } else {
+                    const profile = getProfile() || {};
+                    for (let a = 1; a <= (profile.assignableOutputs || 0); a++) {
+                        const out = state.outputs?.[a];
+                        if (out) send({ cmd: "setAux", aux: a - 1, input: AtemXml.sourceIdToAtemNumeric(out.source) });
+                    }
                 }
             }
         });

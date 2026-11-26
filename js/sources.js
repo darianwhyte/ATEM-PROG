@@ -393,7 +393,7 @@ function getSourcesForDestination(
     // Never self-route or create SS1<->SS2 cycles, and never route M/E 1 into SuperSource
     // (SuperSource feeds into M/E 1; M/E 2-4 are valid upstream sources).
     if (
-        (destination === "superSourceBox" || destination === "superSourceArt") &&
+        (destination === "superSourceBox" || destination === "superSourceArt" || destination === "key") &&
         workspace?.type === "superSource"
     ) {
         const targetSsNum = workspace.resourceId + 1; // 1-indexed
@@ -487,12 +487,41 @@ function getActiveSourceDestination() {
 
 }
 
-// Helper: Returns only the stills allowed by the active device profile
+// Helper: Returns active profile's ATEM Media Pool limits for stills and clips
+function getMediaPoolLimits(profile = (typeof getProfile === "function" ? getProfile() : null)) {
+    const maxStills = Math.max(0, Number(profile?.mediaPoolStills) || 20);
+    const maxClips = Math.max(0, Number(profile?.mediaPoolClips) || 0);
+    return {
+        maxStills,
+        maxClips,
+        supportsClips: maxClips > 0
+    };
+}
+
+// Helper: Returns only the stills and video clips allowed by the active ATEM hardware profile
 function getAvailableStills() {
-    const maxStills = getProfile()?.mediaPoolStills || 20;
-    return state.media
-        .filter(item => item.id >= 0 && item.id < maxStills)
-        .sort((a, b) => a.id - b.id);
+    const { maxStills, maxClips } = getMediaPoolLimits();
+    const sorted = [...(state.media || [])].sort((a, b) => a.id - b.id);
+    const out = [];
+    let stillsSeen = 0;
+    let clipsSeen = 0;
+
+    for (const item of sorted) {
+        if (!item || item.id < 0) continue;
+        if (item.kind === "video") {
+            if (maxClips > 0 && clipsSeen < maxClips) {
+                clipsSeen++;
+                out.push(item);
+            }
+        } else {
+            if (stillsSeen < maxStills) {
+                stillsSeen++;
+                out.push(item);
+            }
+        }
+    }
+
+    return out;
 }
 
 function getPairedKeySourceId(fillSourceId) {

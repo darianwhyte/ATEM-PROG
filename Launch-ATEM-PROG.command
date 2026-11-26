@@ -18,9 +18,9 @@ if ! command -v node >/dev/null 2>&1; then
     exit 0
 fi
 
-if [ ! -d "$BRIDGE_DIR/node_modules" ]; then
+if [ ! -d "$BRIDGE_DIR/node_modules/ws" ] || [ ! -d "$BRIDGE_DIR/node_modules/atem-connection" ]; then
     echo "First-time setup: installing ATEM-PROG service dependencies..."
-    (cd "$BRIDGE_DIR" && npm install)
+    (cd "$BRIDGE_DIR" && npm install --no-audit --no-fund)
 fi
 
 if ! curl -sf --max-time 1 "http://127.0.0.1:8993/api/status" >/dev/null 2>&1; then

@@ -416,8 +416,8 @@ async function importXmlProfile(xmlString, options = {
             }
         }
 
-        // Multi-Views (Official <Settings><MultiViews><MultiView index="...">)
-        const mvNodes = xmlDoc.querySelectorAll("Settings > MultiViews > MultiView, MultiViews > MultiView");
+        // Multi-Views (Official <Settings><MultiViews><MultiView index="..."> + Legacy standalone <MultiView>)
+        const mvNodes = xmlDoc.querySelectorAll("Settings > MultiViews > MultiView, MultiViews > MultiView, Profile > MultiView");
         if (mvNodes.length > 0) {
             mvNodes.forEach((mvNode, fallbackIdx) => {
                 const mvIdx = safeParseIntAttr(mvNode, "index", fallbackIdx, 0, 3);
@@ -704,20 +704,6 @@ async function importXmlProfile(xmlString, options = {
         }
 
         // =====================================================================
-        // PHASE 5: MULTIVIEW
-        // =====================================================================
-        const mvNode = xmlDoc.getElementsByTagName("MultiView")[0];
-        if (mvNode && state.multiView) {
-            state.multiView.layout = mvNode.getAttribute("layout") || "ProgramTop";
-            Array.from(mvNode.getElementsByTagName("Window")).forEach(winNode => {
-                const idx = safeParseIntAttr(winNode, "index", -1, 0, 15);
-                const rawInput = winNode.getAttribute("input") || "";
-                if (idx < 0) return;
-                state.multiView.windows[idx] = parseAtemSource(rawInput, { preserveMePreview: true });
-            });
-        }
-
-        // =====================================================================
         // PHASE 6: AUXILIARIES / ASSIGNABLE OUTPUTS
         // =====================================================================
         if (options.outputs) {
@@ -768,6 +754,8 @@ async function importXmlProfile(xmlString, options = {
             const mediaPoolSection = xmlDoc.getElementsByTagName("MediaPool")[0];
             const stillsWrapper = mediaPoolSection ? mediaPoolSection.getElementsByTagName("Stills")[0] : null;
             const assetNodes = stillsWrapper ? stillsWrapper.getElementsByTagName("Still") : [];
+            const clipsWrapper = mediaPoolSection ? mediaPoolSection.getElementsByTagName("Clips")[0] : null;
+            const clipNodes = clipsWrapper ? clipsWrapper.getElementsByTagName("Clip") : [];
 
             mediaPoolReplaced = true;
             state.media = [];
@@ -775,6 +763,7 @@ async function importXmlProfile(xmlString, options = {
             const currentProfile = getProfile();
             const mediaPlayerNodes = xmlDoc.getElementsByTagName("MediaPlayer");
             const hasExplicitPlayers = mediaPlayerNodes.length > 0;
+            const usedMediaIds = new Set();
 
             Array.from(assetNodes).forEach((assetNode, index) => {
                 const rawPath = assetNode.getAttribute("path") || "";
@@ -782,10 +771,12 @@ async function importXmlProfile(xmlString, options = {
                 const assetName = assetNode.getAttribute("name") || pathName || `Asset_${index}.png`;
                 const slotAttr = assetNode.getAttribute("index") ?? assetNode.getAttribute("slot");
                 const assetId = slotAttr !== null && slotAttr !== undefined ? Number(slotAttr) : index;
+                usedMediaIds.add(assetId);
 
                 const mediaPlaceholderItem = {
                     id: assetId,
                     name: assetName,
+                    kind: "still",
                     url: null,
                     nativeWidth: 1920,
                     nativeHeight: 1080,
@@ -804,13 +795,44 @@ async function importXmlProfile(xmlString, options = {
                 }
             });
 
+            const clipIdByXmlIndex = new Map();
+            let nextClipSlot = 0;
+            Array.from(clipNodes).forEach((clipNode, index) => {
+                const rawPath = clipNode.getAttribute("path") || "";
+                const pathName = rawPath ? rawPath.split(/[\\/]/).pop() : "";
+                const clipName = clipNode.getAttribute("name") || pathName || `Clip_${index}.mp4`;
+                const xmlClipIdx = safeParseIntAttr(clipNode, "index", index, 0, 99);
+                while (usedMediaIds.has(nextClipSlot)) nextClipSlot++;
+                const clipId = nextClipSlot++;
+                usedMediaIds.add(clipId);
+                clipIdByXmlIndex.set(xmlClipIdx, clipId);
+
+                state.media.push({
+                    id: clipId,
+                    name: clipName,
+                    kind: "video",
+                    duration: 0,
+                    loop: true,
+                    playing: true,
+                    posterUrl: null,
+                    url: null,
+                    nativeWidth: 1920,
+                    nativeHeight: 1080,
+                    isPlaceholder: true
+                });
+            });
+
             if (hasExplicitPlayers) {
                 Array.from(mediaPlayerNodes).forEach(mpNode => {
                     const mpIdx = safeParseIntAttr(mpNode, "index", safeParseIntAttr(mpNode, "id", -1, 0, 3), 0, 3);
                     const sourceType = mpNode.getAttribute("sourceType");
                     const sourceIndex = safeParseIntAttr(mpNode, "sourceIndex", -1, -1, 99);
                     if (mpIdx >= 0 && mpIdx < state.mediaPlayers.length) {
-                        state.mediaPlayers[mpIdx].mediaId = (sourceType === "Still" && sourceIndex >= 0) ? sourceIndex : null;
+                        if (sourceType === "Clip" && sourceIndex >= 0 && clipIdByXmlIndex.has(sourceIndex)) {
+                            state.mediaPlayers[mpIdx].mediaId = clipIdByXmlIndex.get(sourceIndex);
+                        } else {
+                            state.mediaPlayers[mpIdx].mediaId = (sourceType === "Still" && sourceIndex >= 0) ? sourceIndex : null;
+                        }
                     }
                 });
             }
@@ -862,8 +884,14 @@ async function importXmlProfile(xmlString, options = {
         return true;
 
     } catch (err) {
-        Object.keys(state).forEach(key => delete state[key]);
-        Object.assign(state, JSON.parse(JSON.stringify(stateSnapshot)));
+        const mvDescriptor = Object.getOwnPropertyDescriptor(state, "multiView");
+        const restored = JSON.parse(JSON.stringify(stateSnapshot));
+        delete restored.multiView;
+        Object.keys(state).forEach(key => { if (key !== "multiView") delete state[key]; });
+        Object.assign(state, restored);
+        if (mvDescriptor && typeof mvDescriptor.get === "function") {
+            Object.defineProperty(state, "multiView", mvDescriptor);
+        }
         console.error("Internal processing loop error:", err.stack);
         alert("Error parsing profile settings.");
 

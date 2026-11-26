@@ -593,6 +593,266 @@ const AtemTestSuite = (() => {
 
                         assertEqual(ShowTemplates.deleteCustomSSPreset(saved.id), true, "Deleted custom preset");
                     }
+                },
+                {
+                    name: "Regression: SuperSource template boxes, USK direct On-Air, CUT emit/record, and MV option labels",
+                    fn() {
+                        resetFreshState("ATEM 2 M/E Constellation HD");
+
+                        // 1. Corporate template populates SuperSource 1 box sources via superSourceBox rule
+                        ShowTemplates.applyShowTemplate("corporate", {
+                            projectName: "Regression Check",
+                            deviceProfile: "ATEM 2 M/E Constellation HD"
+                        });
+                        const ss1 = state.workspaces.find(w => w.type === "superSource" && w.resourceId === 0);
+                        assertEqual(ss1.data.boxes[0].source, "input4", "SS1 Box 1 assigned by template");
+                        assertEqual(ss1.data.boxes[1].source, "input2", "SS1 Box 2 assigned by template");
+                        assertEqual(ss1.data.boxes[2].source, "input7", "SS1 Box 3 assigned by template");
+
+                        // 2. SuperSource key routing allows MP1Key and blocks self-loop
+                        const ssKeys = getSourcesForDestination("key", ss1).map(s => s.id);
+                        assert(ssKeys.includes("mediaPlayer1Key"), "SuperSource key destination includes MediaPlayer1Key");
+                        assert(!ssKeys.includes("superSource1"), "SuperSource key destination blocks self-loop");
+
+                        // 3. USK directOnAir works even when state.editLiveProgram is false (v3 default)
+                        state.editLiveProgram = false;
+                        const me1 = state.workspaces[0];
+                        assertEqual(me1.data.usk[0].enabled, false);
+                        SwitcherEngine.setLayerEnabled(me1, 0, true, "usk", true);
+                        assertEqual(me1.data.usk[0].enabled, true, "USK 1 toggled On Air directly");
+
+                        // 4. CUT with { record: true, emit: true } notifies subscribers and records into MacroRecorder
+                        let notifiedReason = null;
+                        const unsub = SwitcherEngine.subscribe(({ reason }) => { notifiedReason = reason; });
+                        MacroRecorder.startRecording(5, "Cut Rec Test");
+                        SwitcherEngine.performTransitionCut(me1, { record: true, emit: true });
+                        MacroRecorder.addSleepFrames(12);
+                        assertEqual(MacroRecorder.activeRecordingSlot, 5, "activeRecordingSlot matches");
+                        assertEqual(MacroRecorder.recordedCount, 2, "recordedCount tracks CUT + sleep");
+                        const savedMacro = MacroRecorder.stopRecording();
+                        unsub();
+                        assertEqual(notifiedReason, "transitionCut", "CUT emitted transitionCut");
+                        assertEqual(savedMacro.ops[0].id, "TransitionCut", "CUT recorded to macro");
+
+                        // 5. PopoutManager Multi-View assignable sources have non-empty labels
+                        if (typeof PopoutManager !== "undefined") {
+                            const mvSources = PopoutManager.getMvAssignableSources();
+                            assert(mvSources.length > 0, "Multi-View assignable sources populated");
+                            assert(mvSources.every(s => typeof s.label === "string" && s.label.length > 0), "Every MV option has a label");
+                        }
+
+                        // 6. PatchSheetExporter exposes exportPatchCsv (and downloadPatchCsv alias)
+                        if (typeof PatchSheetExporter !== "undefined") {
+                            assertEqual(typeof PatchSheetExporter.exportPatchCsv, "function", "exportPatchCsv exported");
+                            assertEqual(typeof PatchSheetExporter.downloadPatchCsv, "function", "downloadPatchCsv alias exported");
+                        }
+                    }
+                },
+                {
+                    name: "Regression: Engine notifications carry exact me/dsk/aux/layer metadata & respect PREV TRANS",
+                    async fn() {
+                        resetFreshState("ATEM 2 M/E Constellation HD");
+                        const events = [];
+                        const unsub = SwitcherEngine.subscribe((ev) => events.push(ev));
+
+                        try {
+                            SwitcherEngine.setMEProgram(1, "input3");
+                            assertEqual(events.at(-1).reason, "meProgram");
+                            assertEqual(events.at(-1).me, 1, "meProgram carries M/E 2 index");
+
+                            SwitcherEngine.setDSKEnabled(1, true);
+                            assertEqual(events.at(-1).reason, "dskEnabled");
+                            assertEqual(events.at(-1).dsk, 1, "dskEnabled carries DSK 2 index");
+
+                            SwitcherEngine.setAuxSource(4, "input2");
+                            assertEqual(events.at(-1).reason, "auxSource");
+                            assertEqual(events.at(-1).aux, 4, "auxSource carries Aux 4");
+
+                            const ss1 = state.workspaces.find(w => w.type === "superSource" && w.resourceId === 0);
+                            SwitcherEngine.setLayerEnabled(ss1, 2, false, "box");
+                            assertEqual(events.at(-1).ss, 0, "layerEnabled carries SS index");
+                            assertEqual(events.at(-1).box, 2, "layerEnabled carries Box index");
+
+                            // PREV TRANS AUTO must NOT fire transitionAutoStart (must not trigger live hardware AUTO)
+                            const me1 = state.workspaces[0];
+                            me1.data.transitionRate = 1;
+                            SwitcherEngine.setPreviewTransition(me1, true);
+                            events.length = 0;
+                            await SwitcherEngine.performTransitionAuto(me1);
+                            assert(!events.some(e => e.reason === "transitionAutoStart"), "PREV TRANS suppresses transitionAutoStart");
+
+                            // Live AUTO MUST fire transitionAutoStart with me: 0
+                            SwitcherEngine.setPreviewTransition(me1, false);
+                            events.length = 0;
+                            await SwitcherEngine.performTransitionAuto(me1);
+                            const autoStart = events.find(e => e.reason === "transitionAutoStart");
+                            assert(autoStart && autoStart.me === 0, "Live AUTO emits transitionAutoStart with me: 0");
+                        } finally {
+                            unsub();
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            name: "10. Hardware Gating, Compose Toggles, DSK Mode, Macro Catalog & Clip Limits",
+            tests: [
+                {
+                    name: "Compose toggle setters emit full-rebuild notification reasons & DSK mode resolves luma vs linear",
+                    fn() {
+                        resetFreshState("ATEM 2 M/E Constellation HD");
+                        const reasons = [];
+                        const unsub = SwitcherEngine.subscribe(({ reason }) => reasons.push(reason));
+                        try {
+                            const ss1 = state.workspaces.find(w => w.type === "superSource" && w.resourceId === 0);
+                            const me1 = state.workspaces[0];
+                            SwitcherEngine.setLayerCropEnabled(ss1, 0, true, "box");
+                            SwitcherEngine.setLayerBorderEnabled(ss1, 0, true, "box");
+                            SwitcherEngine.setLayerMaskEnabled(me1, 0, true, "usk");
+                            SwitcherEngine.setDSKMaskEnabled(0, true);
+
+                            assert(reasons.includes("layerCropToggle"), "Crop toggle emits layerCropToggle");
+                            assert(reasons.includes("layerBorderToggle"), "Border toggle emits layerBorderToggle");
+                            assert(reasons.includes("layerMaskToggle"), "Mask toggle emits layerMaskToggle");
+                            assert(reasons.includes("dskMaskToggle"), "DSK mask toggle emits dskMaskToggle");
+
+                            // DSK mode: empty keySource -> luma; distinct keySource -> linear
+                            const dsk0 = getDSK(0);
+                            dsk0.source = "mediaPlayer1";
+                            dsk0.keySource = "";
+                            assertEqual(getDSKMode(dsk0), "luma", "DSK with empty keySource uses luma");
+                            dsk0.keySource = "mediaPlayer1Key";
+                            assertEqual(getDSKMode(dsk0), "linear", "DSK with distinct keySource uses linear");
+                        } finally {
+                            unsub();
+                        }
+                    }
+                },
+                {
+                    name: "Bus Mapping is gated to Constellation models only and skipped in templates on Mini/TVS",
+                    fn() {
+                        assertEqual(supportsBusMapping(profiles["ATEM 2 M/E Constellation HD"]), true, "2 M/E Constellation supports Bus Mapping");
+                        assertEqual(supportsBusMapping(profiles["ATEM 1 M/E Constellation 4K"]), true, "1 M/E Constellation 4K supports Bus Mapping");
+                        assertEqual(supportsBusMapping(profiles["ATEM Mini Pro"]), false, "ATEM Mini Pro does NOT support Bus Mapping");
+                        assertEqual(supportsBusMapping(profiles["ATEM Television Studio HD8"]), false, "TVS HD8 does NOT support Bus Mapping");
+
+                        resetFreshState("ATEM Mini Pro");
+                        ShowTemplates.applyShowTemplate("corporate", {
+                            projectName: "Mini Test",
+                            deviceProfile: "ATEM Mini Pro"
+                        });
+                        assertEqual(state.busFollowRules.length, 0, "Corporate template creates 0 bus follow rules on ATEM Mini Pro");
+                    }
+                },
+                {
+                    name: "Macro impact badges (LIVE vs PVW vs EMPTY), profile-filtered catalog & 12f default pause",
+                    fn() {
+                        resetFreshState("ATEM Mini Pro");
+                        const miniCat = MacroEngine.getAvailableActionCatalog(getProfile());
+                        assert(!miniCat.some(a => a.id.startsWith("ss")), "Mini Pro catalog hides SuperSource actions");
+                        assert(miniCat.some(a => a.id === "meProgram") && miniCat.some(a => a.id === "dskClip"), "Mini Pro catalog includes M/E and DSK actions");
+
+                        // Model with SuperSource but no box borders (ATEM Mini Extreme)
+                        resetFreshState("ATEM Mini Extreme");
+                        const extremeCat = MacroEngine.getAvailableActionCatalog(getProfile());
+                        assert(extremeCat.some(a => a.id === "ssBoxSource"), "Mini Extreme catalog includes SuperSource Box actions");
+                        assert(!extremeCat.some(a => a.id === "ssBoxBorderWidth"), "Mini Extreme catalog hides SuperSource Box Border actions");
+
+                        // Model with 0 assignable outputs hides Aux actions
+                        const noAuxCat = MacroEngine.getAvailableActionCatalog({ ...profiles["ATEM Mini Pro"], assignableOutputs: 0 });
+                        assert(!noAuxCat.some(a => a.id === "auxRoute"), "Profile with 0 assignableOutputs hides Aux actions");
+
+                        resetFreshState("ATEM 2 M/E Constellation HD");
+                        const constCat = MacroEngine.getAvailableActionCatalog(getProfile());
+                        assert(constCat.some(a => a.id === "ssBoxBorderWidth"), "Constellation catalog includes SuperSource Box Borders");
+                        assert(constCat.some(a => a.id === "auxRoute"), "Constellation catalog includes Aux actions");
+
+                        const m = MacroEngine.createBlankMacro(0, "Stage Preview");
+                        assertEqual(MacroEngine.classifyMacroImpact(m).kind, "empty", "Blank macro classified as empty");
+
+                        MacroEngine.insertPresetStep(0, -1, "mePreview", { meIndex: 0, source: "input2" });
+                        MacroEngine.insertPause(0, 0);
+                        assertEqual(m.ops[1].frames, "12", "Default pause is 12 frames");
+                        assertEqual(MacroEngine.classifyMacroImpact(m).kind, "preview", "Preview + Pause macro classified as preview");
+
+                        MacroEngine.insertPresetStep(0, 1, "transCut", { meIndex: 0 });
+                        assertEqual(MacroEngine.classifyMacroImpact(m).kind, "live", "Adding CUT flips macro impact to live");
+
+                        MacroEngine.moveStep(0, 2, 0);
+                        assertEqual(m.ops[0].id, "TransitionCut", "moveStep reordered step to index 0");
+                    }
+                },
+                {
+                    name: "Media Pool enforces hardware clip limits (0 clips on ATEM Mini, capped on Constellation)",
+                    fn() {
+                        resetFreshState("ATEM Mini Pro");
+                        assertEqual(getMediaPoolLimits().supportsClips, false, "ATEM Mini Pro does not support video clips");
+                        state.media = [
+                            { id: 0, name: "logo.png", kind: "still" },
+                            { id: 1, name: "intro.mp4", kind: "video" }
+                        ];
+                        const miniAssets = getAvailableStills();
+                        assertEqual(miniAssets.length, 1, "ATEM Mini Pro hides video clips from available pool");
+                        assertEqual(miniAssets[0].name, "logo.png");
+
+                        resetFreshState("ATEM 2 M/E Constellation HD");
+                        assertEqual(getMediaPoolLimits().maxClips, 2, "2 M/E Constellation allows 2 clips");
+                        state.media = [
+                            { id: 0, name: "logo.png", kind: "still" },
+                            { id: 1, name: "clip1.mp4", kind: "video" },
+                            { id: 2, name: "clip2.mp4", kind: "video" },
+                            { id: 3, name: "clip3.mp4", kind: "video" }
+                        ];
+                        const constAssets = getAvailableStills();
+                        const clips = constAssets.filter(a => a.kind === "video");
+                        assertEqual(clips.length, 2, "2 M/E Constellation caps available clips at 2");
+                    }
+                },
+                {
+                    name: "Granular Macro Snapshot supports per-item scope, lean params, and Stage-to-Preview vs Cut-to-Program",
+                    fn() {
+                        resetFreshState("ATEM 4 M/E Constellation 4K");
+                        SwitcherEngine.setMEProgram(0, "input3");
+                        SwitcherEngine.setMEProgram(1, "input5");
+                        SwitcherEngine.setAuxSource(2, "input4");
+
+                        // 1. Stage to Preview, ONLY M/E 1 bus -> 1 op, PreviewInput, PVW badge!
+                        const pvwSnap = MacroRecorder.captureSnapshot(0, "Stage ME1", "", {
+                            stageToPreview: true,
+                            meItems: { 0: { bus: true, trans: false, usks: [] } },
+                            ssItems: {},
+                            dskIndices: [],
+                            auxChannels: []
+                        });
+                        assertEqual(pvwSnap.ops.length, 1, "Lean M/E 1 snapshot produces exactly 1 op");
+                        assertEqual(pvwSnap.ops[0].id, "PreviewInput", "stageToPreview emits PreviewInput");
+                        assertEqual(pvwSnap.ops[0].source, "Input3", "Stages current M/E 1 look onto Preview");
+                        assertEqual(MacroEngine.classifyMacroImpact(pvwSnap).kind, "preview", "Preview snapshot classified as preview");
+
+                        // 2. Cut Straight to Program + Aux 2 only -> 2 ops, ProgramInput + AuxiliaryInput, LIVE badge!
+                        const pgmSnap = MacroRecorder.captureSnapshot(1, "Cut ME1 + Aux2", "", {
+                            stageToPreview: false,
+                            meItems: { 0: { bus: true, trans: false, usks: [] } },
+                            ssItems: {},
+                            dskIndices: [],
+                            auxChannels: [2]
+                        });
+                        assertEqual(pgmSnap.ops.length, 2, "M/E 1 + Aux 2 produces exactly 2 ops");
+                        assertEqual(pgmSnap.ops[0].id, "ProgramInput", "stageToPreview:false emits ProgramInput");
+                        assertEqual(pgmSnap.ops[1].id, "AuxiliaryInput", "Includes selected Aux 2 only");
+                        assertEqual(pgmSnap.ops[1].auxiliaryIndex, "1", "Aux 2 maps to auxiliaryIndex 1");
+                        assertEqual(MacroEngine.classifyMacroImpact(pgmSnap).kind, "live", "Program snapshot classified as live");
+
+                        // 3. Lean SuperSource Box 1 only (ssFullParams: false) -> 5 ops instead of 100+
+                        const ssSnap = MacroRecorder.captureSnapshot(2, "SS1 Box1 Lean", "", {
+                            meItems: {},
+                            ssItems: { 0: { art: false, boxes: [0] } },
+                            ssFullParams: false,
+                            dskIndices: [],
+                            auxChannels: []
+                        });
+                        assertEqual(ssSnap.ops.length, 5, "Lean SS1 Box 1 snapshot emits exactly 5 ops (Source, X, Y, Size, Enable)");
+                    }
                 }
             ]
         }

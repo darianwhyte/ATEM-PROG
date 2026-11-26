@@ -118,6 +118,15 @@
         });
     }
 
+    function esc(val) {
+        return String(val ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+    }
+
     function sendAction(action) {
         if (ws && ws.readyState === 1) {
             ws.send(JSON.stringify({ cmd: "remoteAction", action }));
@@ -167,11 +176,11 @@
                 <div class="remote-subrow" style="justify-content:space-between;">
                     ${mes.length > 1 ? `
                         <div class="remote-subrow">
-                            ${mes.map(m => `<button class="remote-pill-btn ${m.index === activeME ? "active" : ""}" data-me="${m.index}">${m.name}</button>`).join("")}
+                            ${mes.map(m => `<button class="remote-pill-btn ${m.index === activeME ? "active" : ""}" data-me="${Number(m.index)}">${esc(m.name)}</button>`).join("")}
                         </div>
                     ` : ""}
                     <div class="remote-subrow">
-                        ${pages.map(p => `<button class="remote-pill-btn ${busFilter === p.id ? "active" : ""}" data-bfilter="${p.id}">${p.label}</button>`).join("")}
+                        ${pages.map(p => `<button class="remote-pill-btn ${busFilter === p.id ? "active" : ""}" data-bfilter="${esc(p.id)}">${esc(p.label)}</button>`).join("")}
                     </div>
                 </div>
                 <div class="take-bar">
@@ -181,11 +190,11 @@
                 </div>
                 <span class="section-label">Program (PGM)</span>
                 <div class="touch-grid">
-                    ${filtered.map(s => `<button class="touch-btn ${me.program === s.id ? "pgm" : ""}" data-pgm="${s.id}"><span>${s.shortName}</span><small>${s.name}</small></button>`).join("")}
+                    ${filtered.map(s => `<button class="touch-btn ${me.program === s.id ? "pgm" : ""}" data-pgm="${esc(s.id)}"><span>${esc(s.shortName)}</span><small>${esc(s.name)}</small></button>`).join("")}
                 </div>
                 <span class="section-label">Preview (PVW)</span>
                 <div class="touch-grid">
-                    ${filtered.map(s => `<button class="touch-btn ${me.preview === s.id ? "pvw" : ""}" data-pvw="${s.id}"><span>${s.shortName}</span><small>${s.name}</small></button>`).join("")}
+                    ${filtered.map(s => `<button class="touch-btn ${me.preview === s.id ? "pvw" : ""}" data-pvw="${esc(s.id)}"><span>${esc(s.shortName)}</span><small>${esc(s.name)}</small></button>`).join("")}
                 </div>
             `;
             body.querySelectorAll("[data-me]").forEach(b => b.addEventListener("click", () => { activeME = Number(b.dataset.me); render(); }));
@@ -201,11 +210,11 @@
             body.innerHTML = auxs.map(a => `
                 <div class="card" style="padding:14px; display:flex; flex-direction:column; gap:10px;">
                     <div class="field-row" style="justify-content:space-between;">
-                        <strong style="font-size:15px;">AUX ${a.id} · ${a.label}</strong>
-                        <span class="badge cyan">${a.sourceName}</span>
+                        <strong style="font-size:15px;">AUX ${Number(a.id)} · ${esc(a.label)}</strong>
+                        <span class="badge cyan">${esc(a.sourceName)}</span>
                     </div>
-                    <select data-aux="${a.id}" style="padding:12px; font-size:15px;">
-                        ${opts.map(o => `<option value="${o.id}" ${o.id === a.source ? "selected" : ""}>${o.shortName} — ${o.name}</option>`).join("")}
+                    <select data-aux="${Number(a.id)}" style="padding:12px; font-size:15px;">
+                        ${opts.map(o => `<option value="${esc(o.id)}" ${o.id === a.source ? "selected" : ""}>${esc(o.shortName)} — ${esc(o.name)}</option>`).join("")}
                     </select>
                 </div>
             `).join("") || `<div class="muted">No Aux outputs on this switcher profile.</div>`;
@@ -214,13 +223,13 @@
             body.innerHTML = (studio.dsks || []).map(d => `
                 <div class="card" style="padding:14px; display:flex; flex-direction:column; gap:10px;">
                     <div class="field-row" style="justify-content:space-between;">
-                        <strong style="font-size:16px;">DSK ${d.id + 1}</strong>
-                        <span class="badge">${d.fillShort}</span>
+                        <strong style="font-size:16px;">DSK ${Number(d.id) + 1}</strong>
+                        <span class="badge">${esc(d.fillShort)}</span>
                     </div>
                     <div class="take-bar">
-                        <button class="btn ${d.enabled ? "btn-pgm solid" : ""} take-big" data-dsk-air="${d.id}">ON AIR</button>
-                        <button class="btn btn-amber solid take-big" data-dsk-auto="${d.id}">AUTO</button>
-                        <button class="btn ${d.tie ? "btn-accent-soft" : ""} take-big" data-dsk-tie="${d.id}">TIE</button>
+                        <button class="btn ${d.enabled ? "btn-pgm solid" : ""} take-big" data-dsk-air="${Number(d.id)}">ON AIR</button>
+                        <button class="btn btn-amber solid take-big" data-dsk-auto="${Number(d.id)}">AUTO</button>
+                        <button class="btn ${d.tie ? "btn-accent-soft" : ""} take-big" data-dsk-tie="${Number(d.id)}">TIE</button>
                     </div>
                 </div>
             `).join("");
@@ -230,9 +239,9 @@
         } else if (activeTab === "macros") {
             const macs = studio.macros || [];
             body.innerHTML = `<div class="touch-grid">${macs.map(m => `
-                <button class="touch-btn" data-mac="${m.index}">
-                    <span class="muted" style="font-size:11px;">#${m.index + 1}</span>
-                    <small style="font-size:13px; opacity:1;">${m.name}</small>
+                <button class="touch-btn" data-mac="${Number(m.index)}">
+                    <span class="muted" style="font-size:11px;">#${Number(m.index) + 1}</span>
+                    <small style="font-size:13px; opacity:1;">${esc(m.name)}</small>
                 </button>
             `).join("") || `<div class="muted">No macros created yet.</div>`}</div>`;
             body.querySelectorAll("[data-mac]").forEach(b => b.addEventListener("click", () => sendAction({ type: "runMacro", index: Number(b.dataset.mac) })));
@@ -242,11 +251,11 @@
             const srcObj = me.sources.find(s => s.id === tallyWatchSrc) || { shortName: tallyWatchSrc, name: tallyWatchSrc };
             body.innerHTML = `
                 <select id="selTallyCam" style="padding:12px; font-size:15px;">
-                    ${me.sources.map(s => `<option value="${s.id}" ${s.id === tallyWatchSrc ? "selected" : ""}>Watch: ${s.shortName} — ${s.name}</option>`).join("")}
+                    ${me.sources.map(s => `<option value="${esc(s.id)}" ${s.id === tallyWatchSrc ? "selected" : ""}>Watch: ${esc(s.shortName)} — ${esc(s.name)}</option>`).join("")}
                 </select>
                 <div class="tally-lamp ${isPgm ? "is-pgm" : (isPvw ? "is-pvw" : "")}">
                     <div style="font-size:52px; font-weight:900; letter-spacing:0.06em;">${isPgm ? "ON AIR" : (isPvw ? "PREVIEW" : "STANDBY")}</div>
-                    <div style="font-size:22px; font-weight:700;">${srcObj.shortName} · ${srcObj.name}</div>
+                    <div style="font-size:22px; font-weight:700;">${esc(srcObj.shortName)} · ${esc(srcObj.name)}</div>
                 </div>
             `;
             body.querySelector("#selTallyCam")?.addEventListener("change", (e) => { tallyWatchSrc = e.target.value; render(); });

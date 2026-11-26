@@ -21,10 +21,13 @@ if errorlevel 1 (
     exit /b 0
 )
 
-if not exist "%~dp0bridge\node_modules" (
+set "NEED_INSTALL=0"
+if not exist "%~dp0bridge\node_modules\ws\package.json" set "NEED_INSTALL=1"
+if not exist "%~dp0bridge\node_modules\atem-connection\package.json" set "NEED_INSTALL=1"
+if "%NEED_INSTALL%"=="1" (
     echo First-time setup: installing ATEM-PROG service dependencies...
     pushd "%~dp0bridge"
-    call npm.cmd install
+    call npm.cmd install --no-audit --no-fund
     popd
 )
 

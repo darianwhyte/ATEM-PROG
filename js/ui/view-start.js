@@ -196,14 +196,18 @@ const ViewStart = (() => {
                                 </div>
                             </div>
 
-                            ${activeTpl.id !== "blank" && maxAux > 0 ? `
+                            ${activeTpl.id !== "blank" && maxAux > 0 ? (() => {
+                                const canBusMap = typeof supportsBusMapping === "function" ? supportsBusMapping(selectedProfileObj) : false;
+                                return `
                                 <div class="field">
                                     <label>
                                         <span>Pre-filled Destinations (Editable)</span>
-                                        <label class="check-row" style="font-size:11px; font-weight:500;">
-                                            <input type="checkbox" id="chkWizardRecipes" ${draftEnableRecipes ? "checked" : ""}>
-                                            Include Bus Follow recipes (Mix-Minus / Foldback)
-                                        </label>
+                                        ${canBusMap ? `
+                                            <label class="check-row" style="font-size:11px; font-weight:500;">
+                                                <input type="checkbox" id="chkWizardRecipes" ${draftEnableRecipes ? "checked" : ""}>
+                                                Include Bus Follow recipes (Mix-Minus / Foldback)
+                                            </label>
+                                        ` : ""}
                                     </label>
                                     <div class="dest-preview-grid">
                                         ${draftOutputs.filter(o => o.ch <= maxAux).map((o, idx) => `
@@ -213,7 +217,7 @@ const ViewStart = (() => {
                                             </div>
                                         `).join("")}
                                     </div>
-                                    ${activeTpl.busFollow?.length && draftEnableRecipes ? `
+                                    ${canBusMap && activeTpl.busFollow?.length && draftEnableRecipes ? `
                                         <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">
                                             ${activeTpl.busFollow.filter(bf => bf.targetId <= maxAux).map(bf => {
                                                 const rec = ShowTemplates.BUS_FOLLOW_RECIPES.find(r => r.id === bf.recipe);
@@ -222,7 +226,8 @@ const ViewStart = (() => {
                                         </div>
                                     ` : ""}
                                 </div>
-                            ` : ""}
+                            `;
+                            })() : ""}
 
                             <div class="field-row" style="justify-content:flex-end; padding-top:6px; border-top:1px solid var(--border);">
                                 <button class="btn btn-primary btn-lg" id="btnWizardCreate">Create & Open Show →</button>
