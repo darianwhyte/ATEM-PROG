@@ -253,6 +253,8 @@ const ViewMacros = (() => {
         state.workspaces.filter(w => w.type === "superSource" && isWorkspaceAvailable(w)).forEach(w => busOptions.push([`ss${w.resourceId}`, w.name]));
         for (let a = 1; a <= Math.min(8, profile.assignableOutputs || 0); a++) busOptions.push([`aux${a}`, `AUX ${a}`]);
 
+        const bridgeConnected = typeof AtemBridge !== "undefined" && !!AtemBridge.getStatus().atemConnected;
+
         container.innerHTML = `
             <div class="routing-view">
                 <div class="subbar">
@@ -260,6 +262,7 @@ const ViewMacros = (() => {
                         <button class="btn btn-sm btn-primary" id="btnMacNew">+ Blank Macro</button>
                         <button class="btn btn-sm" id="btnMacSnap">Snapshot Current State</button>
                         <button class="btn btn-sm btn-danger-text" id="btnMacRec">● Record Live</button>
+                        ${bridgeConnected ? `<button class="btn btn-sm btn-accent-soft" id="btnMacPullHdw">⬇ Pull from ATEM</button>` : ""}
                     </div>
                     <div class="seg">
                         <button class="seg-item ${rightMode === "preview" ? "active" : ""}" data-mright="preview">Sandbox Monitor</button>
@@ -302,6 +305,7 @@ const ViewMacros = (() => {
                                 <div class="field-row" style="flex-wrap:wrap; gap:5px; padding:8px; border-radius:8px; background:var(--bg-surface); border:1px solid var(--border);">
                                     <button class="btn btn-xs btn-pvw solid" id="btnMacPlaySand">▶ Sandbox</button>
                                     <button class="btn btn-xs btn-amber solid" id="btnMacPlayLive">⚡ Run Live</button>
+                                    ${bridgeConnected ? `<button class="btn btn-xs btn-accent-soft" id="btnMacPlayHdw" title="Trigger this macro slot directly on connected ATEM hardware">📡 Run on ATEM</button>` : ""}
                                     <button class="btn btn-xs" id="btnMacStep">⏭ Step</button>
                                     <button class="btn btn-xs" id="btnMacToStep" ${selectedStepIdx >= 0 ? "" : "disabled"}>↳ To Step</button>
                                     <button class="btn btn-xs btn-pgm" id="btnMacStop">⏹ Stop</button>
@@ -416,6 +420,9 @@ const ViewMacros = (() => {
         });
         container.querySelector("#btnMacSnap")?.addEventListener("click", () => OverlaysUI.openMacroCreateModal("snapshot"));
         container.querySelector("#btnMacRec")?.addEventListener("click", () => OverlaysUI.openMacroCreateModal("record"));
+        container.querySelector("#btnMacPullHdw")?.addEventListener("click", () => {
+            if (typeof AtemBridge !== "undefined") AtemBridge.pullHardwareMacros();
+        });
         container.querySelectorAll("[data-mright]").forEach(btn => {
             btn.addEventListener("click", () => { rightMode = btn.dataset.mright; render(container); });
         });
@@ -464,6 +471,12 @@ const ViewMacros = (() => {
             container.querySelector("#btnMacPlayLive")?.addEventListener("click", async () => {
                 await MacroPlayer.playMacro(selectedSlot, { mode: "live", speed: playbackSpeed });
                 AppUI.toast(`Executed "${macro.name}" Live`, "ok");
+            });
+            container.querySelector("#btnMacPlayHdw")?.addEventListener("click", () => {
+                if (typeof AtemBridge !== "undefined") {
+                    AtemBridge.runHardwareMacro(selectedSlot);
+                    AppUI.toast(`Triggered Hardware Macro #${selectedSlot + 1}`, "ok");
+                }
             });
             container.querySelector("#btnMacStep")?.addEventListener("click", () => {
                 selectedStepIdx = MacroPlayer.stepNext(selectedSlot);

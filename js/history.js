@@ -16,6 +16,7 @@ const HistoryManager = (() => {
         "dskAutoFrame",
         "dskAutoStart",
         "ftbStart",
+        "superSourceAnimFrame",
         "historyRestore",
         "storageRestore",
         "workspace",

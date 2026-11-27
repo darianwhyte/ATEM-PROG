@@ -312,7 +312,7 @@ const AppUI = (() => {
 
     const FAST_TICK_REASONS = new Set([
         "transitionAutoFrame", "transitionAutoStart", "dskAutoFrame", "dskAutoStart",
-        "ftbFrame", "ftbStart", "flyKeyFrame",
+        "ftbFrame", "ftbStart", "flyKeyFrame", "superSourceAnimFrame",
         "transitionPosition", "layerPos", "layerSize", "layerCrop", "layerMask",
         "lumaClip", "lumaGain", "linearClip", "linearGain",
         "chromaColor", "chromaCorrection", "chromaSpill",

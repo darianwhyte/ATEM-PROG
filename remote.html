@@ -224,6 +224,7 @@
     let macroBank = typeof saved.macroBank === "string" ? saved.macroBank : "all";
     let tallyME = Number.isInteger(saved.tallyME) ? saved.tallyME : 0;
     let tallyWatchSrc = typeof saved.tallyWatchSrc === "string" ? saved.tallyWatchSrc : "input1";
+    let ssAnimate = saved.ssAnimate !== undefined ? !!saved.ssAnimate : true;
 
     let studio = null;
     let ws = null;
@@ -233,7 +234,7 @@
             localStorage.setItem(PREFS_KEY, JSON.stringify({
                 themeIdx, activeTab, activeME, activeSS, buttonScale,
                 busFilters, busRows, verticalBus, transSections, gangTargets,
-                destSubMode, selectedDestKey, destPreviewMap, macroBank, tallyME, tallyWatchSrc
+                destSubMode, selectedDestKey, destPreviewMap, macroBank, tallyME, tallyWatchSrc, ssAnimate
             }));
         } catch {}
     }
@@ -843,7 +844,10 @@
                 </div>
             </div>
 
-            <span class="section-label">Layout Presets (${presets.length})</span>
+            <div class="remote-subrow" style="justify-content:space-between;">
+                <span class="section-label">Layout Presets (${presets.length})</span>
+                <button class="remote-pill-btn sm ${ssAnimate ? "active" : ""}" id="btnRemSSAnim">${ssAnimate ? "✨ Animate" : "⚡ Cut"}</button>
+            </div>
             <div class="ss-preset-grid">
                 ${presets.map(p => `
                     <button class="ss-preset-btn" data-ss-preset="${esc(p.id)}">
@@ -870,8 +874,9 @@
         `;
 
         body.querySelectorAll("[data-ss-idx]").forEach(b => b.addEventListener("click", () => { activeSS = Number(b.dataset.ssIdx); persistPrefs(); render(); }));
+        body.querySelector("#btnRemSSAnim")?.addEventListener("click", () => { ssAnimate = !ssAnimate; persistPrefs(); render(); });
         body.querySelector("#selSSArt")?.addEventListener("change", (e) => sendAction({ type: "setSSArtSource", ss: ss.index, source: e.target.value }));
-        body.querySelectorAll("[data-ss-preset]").forEach(b => b.addEventListener("click", () => sendAction({ type: "applySSPreset", ss: ss.index, presetId: b.dataset.ssPreset })));
+        body.querySelectorAll("[data-ss-preset]").forEach(b => b.addEventListener("click", () => sendAction({ type: "applySSPreset", ss: ss.index, presetId: b.dataset.ssPreset, animate: ssAnimate })));
         body.querySelectorAll("[data-ss-box-on]").forEach(b => b.addEventListener("click", () => sendAction({ type: "setSSBoxEnabled", ss: ss.index, box: Number(b.dataset.ssBoxOn) })));
         body.querySelectorAll("[data-ss-box-src]").forEach(s => s.addEventListener("change", (e) => sendAction({ type: "setSSBoxSource", ss: ss.index, box: Number(s.dataset.ssBoxSrc), source: e.target.value })));
     }

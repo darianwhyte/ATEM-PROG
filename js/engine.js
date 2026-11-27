@@ -322,7 +322,7 @@ const SwitcherEngine = (() => {
         if (!ws) return false;
         ws.data.nextTransition.bkgd = !ws.data.nextTransition.bkgd;
         logNextTransition(ws);
-        notify("nextTransition", false);
+        notify("nextTransition", false, { me: ws.resourceId });
         return true;
     }
 
@@ -331,7 +331,7 @@ const SwitcherEngine = (() => {
         if (!ws || !ws.data.nextTransition?.usk || uskIdx < 0 || uskIdx > 3) return false;
         ws.data.nextTransition.usk[uskIdx] = !ws.data.nextTransition.usk[uskIdx];
         logNextTransition(ws);
-        notify("nextTransition", false);
+        notify("nextTransition", false, { me: ws.resourceId });
         return true;
     }
 
@@ -340,7 +340,7 @@ const SwitcherEngine = (() => {
         if (!ws) return false;
         ws.data.transitionStyle = style;
         logMacroAction({ id: "TransitionStyle", mixEffectBlockIndex: String(ws.resourceId), style });
-        notify("transitionStyle", false);
+        notify("transitionStyle", false, { me: ws.resourceId });
         return true;
     }
 
@@ -349,7 +349,7 @@ const SwitcherEngine = (() => {
         if (!ws) return false;
         ws.data.transitionRate = Math.max(1, Math.min(250, parseInt(rate, 10) || 25));
         logMacroAction({ id: "TransitionStyle", mixEffectBlockIndex: String(ws.resourceId), rate: String(ws.data.transitionRate) });
-        notify("transitionRate", false);
+        notify("transitionRate", false, { me: ws.resourceId });
         return true;
     }
 
@@ -449,7 +449,7 @@ const SwitcherEngine = (() => {
             ws.data.transitionProgress = 0;
             applyBusFollowers(ws.resourceId, "autoProgress", { progress: 0 });
         }
-        notify("previewTransition", true);
+        notify("previewTransition", true, { me: ws.resourceId });
         return true;
     }
 
@@ -504,7 +504,7 @@ const SwitcherEngine = (() => {
         } else {
             return false;
         }
-        notify("transitionParam", false);
+        notify("transitionParam", false, { me: ws.resourceId });
         return true;
     }
 
@@ -514,7 +514,7 @@ const SwitcherEngine = (() => {
         ws.data.ftb ??= { enabled: false, rate: 25, progress: 0 };
         ws.data.ftb.rate = Math.max(1, Math.min(250, parseInt(rate, 10) || 25));
         logMacroAction({ id: "FadeToBlackRate", mixEffectBlockIndex: String(ws.resourceId), rate: String(ws.data.ftb.rate) });
-        notify("ftbRate", false);
+        notify("ftbRate", false, { me: ws.resourceId });
         return true;
     }
 
@@ -578,7 +578,7 @@ const SwitcherEngine = (() => {
         };
         if (slot === "A") layer.keyframeA = snap;
         else layer.keyframeB = snap;
-        notify("uskKeyframeSet", false);
+        notify("uskKeyframeSet", false, { me: ws.resourceId, usk: uskIdx, slot });
         return snap;
     }
 
@@ -620,6 +620,7 @@ const SwitcherEngine = (() => {
         }
 
         _activeFlyKeyRuns.add(key);
+        notify("uskKeyframeRun", true, { me: ws.resourceId, usk: uskIdx, target });
         try {
             if (dve && dest.cropEnabled) dve.cropEnabled = true;
             for (let f = 1; f <= totalFrames; f++) {
@@ -758,7 +759,7 @@ const SwitcherEngine = (() => {
             }
         }
 
-        notify("layerKeyType", false);
+        notify("layerKeyType", true, { me: ws.resourceId, usk: layerIdx });
         recordLayerParams(ws, layer, layerIdx);
         return success;
     }
@@ -768,7 +769,7 @@ const SwitcherEngine = (() => {
         if (!layer) return false;
 
         const success = setFlyingKey(layer, !!enabled);
-        notify("layerFlyingKey", false);
+        notify("layerFlyingKey", true, { me: ws.resourceId, usk: layerIdx });
         recordLayerParams(ws, layer, layerIdx);
         return success;
     }
@@ -781,7 +782,7 @@ const SwitcherEngine = (() => {
         else if (layer.keyType === "luma") getLumaSettings(layer).keySource = sourceId || null;
         else if (layer.keyType === "chroma") getChromaSettings(layer).keySource = sourceId || null;
 
-        notify("layerKeySource", false);
+        notify("layerKeySource", false, { me: ws.resourceId, usk: layerIdx });
         recordLayerParams(ws, layer, layerIdx);
         return true;
     }
@@ -806,7 +807,9 @@ const SwitcherEngine = (() => {
         dve[p[0]] = num;
         if (dve.cropLinked) dve[p[1]] = num;
 
-        notify("layerCrop", false);
+        notify("layerCrop", false, ws.type === "superSource"
+            ? { ss: ws.resourceId, box: layerIdx }
+            : { me: ws.resourceId, usk: layerIdx });
         const prefix = isBox ? "SuperSourceBoxCrop" : "UpstreamKeyerDVECrop";
         recordLayerSingleParam(`${prefix}${p[2]}`, { [p[4]]: String(dve[p[0]]) }, ws, layerGroup, layerIdx);
         if (dve.cropLinked) {
@@ -832,7 +835,7 @@ const SwitcherEngine = (() => {
         layer[p[0]] = num;
         if (layer.maskLinked) layer[p[1]] = num;
 
-        notify("layerMask", false);
+        notify("layerMask", false, { me: ws.resourceId, usk: layerIdx });
         recordLayerSingleParam(`UpstreamKeyerMask${p[2]}`, { [p[4]]: String(layer[p[0]]) }, ws, "usk", layerIdx);
         if (layer.maskLinked) {
             recordLayerSingleParam(`UpstreamKeyerMask${p[3]}`, { [p[5]]: String(layer[p[1]]) }, ws, "usk", layerIdx);
@@ -883,7 +886,7 @@ const SwitcherEngine = (() => {
             logMacroAction({ id: "SuperSourceArtInvert", superSourceIndex: ssIdx, invert: ws.data.artInvert ? "True" : "False" });
         }
 
-        notify("superSourceArt", false);
+        notify("superSourceArt", false, { ss: ws.resourceId });
         return true;
     }
 
@@ -945,8 +948,314 @@ const SwitcherEngine = (() => {
             logMacroAction({ id: "SuperSourceBoxSize", ...base, size: box.size.toFixed(2) });
         });
 
-        notify("superSourcePreset", false);
+        notify("superSourcePreset", false, { ss: ws.resourceId });
         return true;
+    }
+
+    // =========================================================================
+    // SUPERSOURCE MERGE ANIMATOR (vMix Merge-Style Animated Transitions)
+    // =========================================================================
+    const SS_ANIM_STORAGE_KEY = "atem_prog_ss_anim_v1";
+    const DEFAULT_SS_ANIM = {
+        enabled: true,
+        durationMs: 600,
+        easing: "easeInOut", // "easeInOut" | "easeOut" | "easeIn" | "linear" | "overshoot"
+        offBoxMode: "shrink"  // "cut" | "fade" | "shrink" | "slide" | "crop"
+    };
+    const _activeSSAnimations = new Map(); // ssIdx -> { cancel: fn }
+
+    function getSSAnimSettings() {
+        if (!state.ssAnim || typeof state.ssAnim !== "object") {
+            let saved = null;
+            try {
+                if (typeof localStorage !== "undefined") {
+                    const raw = localStorage.getItem(SS_ANIM_STORAGE_KEY);
+                    if (raw) saved = JSON.parse(raw);
+                }
+            } catch {}
+            state.ssAnim = {
+                ...DEFAULT_SS_ANIM,
+                ...(saved && typeof saved === "object" ? saved : {})
+            };
+        }
+        return {
+            enabled: state.ssAnim.enabled !== false,
+            durationMs: Math.max(0, Math.min(4000, Number(state.ssAnim.durationMs) || 600)),
+            easing: ["easeInOut", "easeOut", "easeIn", "linear", "overshoot"].includes(state.ssAnim.easing) ? state.ssAnim.easing : "easeInOut",
+            offBoxMode: ["cut", "fade", "shrink", "slide", "crop"].includes(state.ssAnim.offBoxMode) ? state.ssAnim.offBoxMode : "shrink"
+        };
+    }
+
+    function setSSAnimSettings(patch = {}) {
+        const cur = getSSAnimSettings();
+        const next = {
+            enabled: patch.enabled !== undefined ? !!patch.enabled : cur.enabled,
+            durationMs: patch.durationMs !== undefined ? Math.max(0, Math.min(4000, Number(patch.durationMs) || 600)) : cur.durationMs,
+            easing: ["easeInOut", "easeOut", "easeIn", "linear", "overshoot"].includes(patch.easing) ? patch.easing : cur.easing,
+            offBoxMode: ["cut", "fade", "shrink", "slide", "crop"].includes(patch.offBoxMode) ? patch.offBoxMode : cur.offBoxMode
+        };
+        state.ssAnim = next;
+        try {
+            if (typeof localStorage !== "undefined") {
+                localStorage.setItem(SS_ANIM_STORAGE_KEY, JSON.stringify(next));
+            }
+        } catch {}
+        return next;
+    }
+
+    function applyEasingCurve(t, easing) {
+        const x = Math.max(0, Math.min(1, t));
+        switch (easing) {
+            case "linear": return x;
+            case "easeIn": return x * x * x;
+            case "easeOut": return 1 - Math.pow(1 - x, 3);
+            case "overshoot": {
+                const c1 = 1.35;
+                const c3 = c1 + 1;
+                return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+            }
+            case "easeInOut":
+            default:
+                return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+        }
+    }
+
+    function cancelSuperSourceAnimation(ssIdx) {
+        const active = _activeSSAnimations.get(Number(ssIdx));
+        if (active) {
+            active.cancel();
+            _activeSSAnimations.delete(Number(ssIdx));
+        }
+    }
+
+    function applySSBoxTarget(box, target) {
+        box.enabled = !!target.enabled;
+        if (target.source !== undefined) box.source = target.source;
+        box.x = Number(target.x ?? 0);
+        box.y = Number(target.y ?? 0);
+        box.size = Math.max(0.07, Math.min(1.0, Number(target.size ?? 0.5)));
+        box.cropEnabled = !!target.cropEnabled;
+        box.cropTop = Number(target.cropTop ?? 0);
+        box.cropBottom = Number(target.cropBottom ?? 0);
+        box.cropLeft = Number(target.cropLeft ?? 0);
+        box.cropRight = Number(target.cropRight ?? 0);
+        delete box._animAlpha;
+    }
+
+    function animateSuperSourceTo(ssWorkspaceOrIdx, targetBoxes = [], opts = {}) {
+        const ws = getSSWorkspace(ssWorkspaceOrIdx);
+        if (!ws?.data?.boxes || !Array.isArray(targetBoxes)) return Promise.resolve(false);
+        const ssIdx = ws.resourceId;
+        cancelSuperSourceAnimation(ssIdx);
+
+        const cfg = getSSAnimSettings();
+        const durationMs = opts.instant ? 0 : Math.max(0, Number(opts.durationMs ?? cfg.durationMs) || 0);
+        const easing = opts.easing || cfg.easing || "easeInOut";
+        const offBoxMode = opts.offBoxMode || cfg.offBoxMode || "shrink";
+
+        if (opts.artPatch && typeof opts.artPatch === "object") {
+            Object.assign(ws.data, opts.artPatch);
+        }
+
+        const targets = ws.data.boxes.map((cur, idx) => {
+            const t = targetBoxes[idx] || {};
+            return {
+                enabled: t.enabled !== undefined ? !!t.enabled : !!cur.enabled,
+                source: t.source !== undefined ? t.source : cur.source,
+                x: Number(t.x ?? cur.x ?? 0),
+                y: Number(t.y ?? cur.y ?? 0),
+                size: Math.max(0.07, Math.min(1.0, Number(t.size ?? cur.size ?? 0.5))),
+                cropEnabled: t.cropEnabled !== undefined ? !!t.cropEnabled : !!cur.cropEnabled,
+                cropTop: Number(t.cropTop ?? cur.cropTop ?? 0),
+                cropBottom: Number(t.cropBottom ?? cur.cropBottom ?? 0),
+                cropLeft: Number(t.cropLeft ?? cur.cropLeft ?? 0),
+                cropRight: Number(t.cropRight ?? cur.cropRight ?? 0)
+            };
+        });
+
+        const finishImmediate = () => {
+            ws.data.boxes.forEach((box, idx) => {
+                applySSBoxTarget(box, targets[idx]);
+                const base = { superSourceIndex: String(ssIdx), boxIndex: String(idx) };
+                logMacroAction({ id: "SuperSourceBoxEnabled", ...base, enabled: box.enabled ? "True" : "False" });
+                if (targetBoxes[idx]?.source !== undefined) {
+                    logMacroAction({ id: "SuperSourceBoxSource", ...base, source: mapSource(box.source) });
+                }
+                logMacroAction({ id: "SuperSourceBoxPositionX", ...base, positionX: box.x.toFixed(2) });
+                logMacroAction({ id: "SuperSourceBoxPositionY", ...base, positionY: box.y.toFixed(2) });
+                logMacroAction({ id: "SuperSourceBoxSize", ...base, size: box.size.toFixed(2) });
+            });
+            if (opts.artPatch) {
+                notify("superSourceArt", false, { ss: ssIdx });
+            }
+            notify("superSourcePreset", true, { ss: ssIdx });
+        };
+
+        if (durationMs <= 16) {
+            finishImmediate();
+            return Promise.resolve(true);
+        }
+
+        // Snapshot start frames & determine per-box enter/exit endpoints
+        const specs = ws.data.boxes.map((cur, idx) => {
+            const tgt = targets[idx];
+            const wasOn = !!cur.enabled;
+            const willOn = !!tgt.enabled;
+            const entering = !wasOn && willOn;
+            const exiting = wasOn && !willOn;
+            const stayingOn = wasOn && willOn;
+
+            let start = {
+                x: Number(cur.x ?? 0),
+                y: Number(cur.y ?? 0),
+                size: Math.max(0.07, Math.min(1.0, Number(cur.size ?? 0.5))),
+                cropEnabled: !!cur.cropEnabled,
+                cropTop: Number(cur.cropTop ?? 0),
+                cropBottom: Number(cur.cropBottom ?? 0),
+                cropLeft: Number(cur.cropLeft ?? 0),
+                cropRight: Number(cur.cropRight ?? 0),
+                alpha: wasOn ? 1 : 0
+            };
+            let end = { ...tgt, alpha: willOn ? 1 : 0 };
+
+            if (entering) {
+                if (tgt.source !== undefined) cur.source = tgt.source;
+                if (offBoxMode === "shrink") {
+                    start = { ...end, size: 0.07, alpha: 1 };
+                } else if (offBoxMode === "slide") {
+                    const edgeX = tgt.x < 0 ? -24 : 24;
+                    start = { ...end, x: edgeX, alpha: 1 };
+                } else if (offBoxMode === "crop") {
+                    start = { ...end, cropEnabled: true, cropLeft: 16000, cropRight: 16000, alpha: 1 };
+                } else if (offBoxMode === "fade") {
+                    start = { ...end, alpha: 0 };
+                } else { // "cut"
+                    start = { ...end, alpha: 1 };
+                }
+            } else if (exiting) {
+                if (offBoxMode === "shrink") {
+                    end = { ...start, source: tgt.source, enabled: false, size: 0.07, alpha: 1 };
+                } else if (offBoxMode === "slide") {
+                    const edgeX = start.x < 0 ? -24 : 24;
+                    end = { ...start, source: tgt.source, enabled: false, x: edgeX, alpha: 1 };
+                } else if (offBoxMode === "crop") {
+                    end = { ...start, source: tgt.source, enabled: false, cropEnabled: true, cropLeft: 16000, cropRight: 16000, alpha: 1 };
+                } else if (offBoxMode === "fade") {
+                    end = { ...start, source: tgt.source, enabled: false, alpha: 0 };
+                }
+            }
+
+            return { start, end, tgt, entering, exiting, stayingOn, wasOn, willOn };
+        });
+
+        // Notify art update immediately if staged
+        if (opts.artPatch) {
+            notify("superSourceArt", false, { ss: ssIdx });
+        }
+
+        return new Promise((resolve) => {
+            let cancelled = false;
+            let rafId = null;
+            let ivId = null;
+            const startTime = Date.now();
+
+            const cleanupTimers = () => {
+                if (rafId !== null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(rafId);
+                if (ivId !== null) clearInterval(ivId);
+                rafId = null;
+                ivId = null;
+            };
+
+            _activeSSAnimations.set(ssIdx, {
+                cancel: () => {
+                    cancelled = true;
+                    cleanupTimers();
+                    ws.data.boxes.forEach(b => { if (b) delete b._animAlpha; });
+                    resolve(false);
+                }
+            });
+
+            const stepFrame = () => {
+                if (cancelled) return;
+                const raw = Math.min(1, (Date.now() - startTime) / durationMs);
+                const e = applyEasingCurve(raw, easing);
+
+                specs.forEach((sp, idx) => {
+                    const box = ws.data.boxes[idx];
+                    if (!box) return;
+                    if (!sp.wasOn && !sp.willOn) {
+                        box.enabled = false;
+                        delete box._animAlpha;
+                        return;
+                    }
+                    if (sp.exiting && offBoxMode === "cut") {
+                        box.enabled = false;
+                        delete box._animAlpha;
+                        return;
+                    }
+                    box.enabled = true;
+                    if (sp.stayingOn && sp.tgt.source !== undefined) box.source = sp.tgt.source;
+
+                    const lerp = (a, b) => a + (b - a) * e;
+                    box.x = Number(Math.max(-32, Math.min(32, lerp(sp.start.x, sp.end.x))).toFixed(2));
+                    box.y = Number(Math.max(-18, Math.min(18, lerp(sp.start.y, sp.end.y))).toFixed(2));
+                    box.size = Number(Math.max(0.07, Math.min(1.0, lerp(sp.start.size, sp.end.size))).toFixed(3));
+
+                    if ((sp.entering || sp.exiting) && offBoxMode === "crop") {
+                        box.cropEnabled = true;
+                    } else if (sp.stayingOn) {
+                        box.cropEnabled = !!(sp.start.cropEnabled || sp.tgt.cropEnabled);
+                    }
+                    box.cropTop = Math.max(0, Math.round(lerp(sp.start.cropTop, sp.end.cropTop)));
+                    box.cropBottom = Math.max(0, Math.round(lerp(sp.start.cropBottom, sp.end.cropBottom)));
+                    box.cropLeft = Math.max(0, Math.round(lerp(sp.start.cropLeft, sp.end.cropLeft)));
+                    box.cropRight = Math.max(0, Math.round(lerp(sp.start.cropRight, sp.end.cropRight)));
+
+                    if (offBoxMode === "fade" && (sp.entering || sp.exiting)) {
+                        box._animAlpha = Math.max(0, Math.min(1, sp.start.alpha + (sp.end.alpha - sp.start.alpha) * raw));
+                    } else {
+                        delete box._animAlpha;
+                    }
+                });
+
+                if (raw >= 1) {
+                    cleanupTimers();
+                    _activeSSAnimations.delete(ssIdx);
+                    finishImmediate();
+                    resolve(true);
+                } else {
+                    notify("superSourceAnimFrame", true, { ss: ssIdx });
+                    if (typeof requestAnimationFrame === "function") {
+                        rafId = requestAnimationFrame(stepFrame);
+                    }
+                }
+            };
+
+            if (typeof requestAnimationFrame === "function") {
+                rafId = requestAnimationFrame(stepFrame);
+            } else {
+                ivId = setInterval(stepFrame, 30);
+            }
+        });
+    }
+
+    function commitSuperSourceState(ssWorkspaceOrIdx, draftData, { animate = false, animOpts = {} } = {}) {
+        const ws = getSSWorkspace(ssWorkspaceOrIdx);
+        if (!ws?.data || !draftData) return Promise.resolve(false);
+        const artPatch = {
+            artSource: draftData.artSource || "",
+            artKeySource: draftData.artKeySource || "",
+            artPlace: draftData.artPlace === "Foreground" ? "Foreground" : "Background",
+            artPremultiplied: !!draftData.artPremultiplied,
+            artClip: Number(draftData.artClip ?? 50),
+            artGain: Number(draftData.artGain ?? 50),
+            artInvert: !!draftData.artInvert
+        };
+        return animateSuperSourceTo(ws, draftData.boxes || [], {
+            ...animOpts,
+            instant: !animate,
+            artPatch
+        });
     }
 
     // =========================================================================
@@ -975,7 +1284,7 @@ const SwitcherEngine = (() => {
         }
 
         logMacroAction({ id: "DownstreamKeyerFillInput", downstreamKeyerIndex: dskIdx, source: mapSource(dsk.source) });
-        notify("dskFill", false);
+        notify("dskFill", false, { dsk: dsk.id });
         return true;
     }
 
@@ -984,7 +1293,7 @@ const SwitcherEngine = (() => {
         if (!dsk) return false;
         dsk.keySource = sourceId;
         recordDSKParams(dsk);
-        notify("dskKey", false);
+        notify("dskKey", false, { dsk: dsk.id });
         return true;
     }
 
@@ -1011,7 +1320,7 @@ const SwitcherEngine = (() => {
         if (!dsk) return false;
         dsk.rate = Math.max(1, Math.min(250, parseInt(rate, 10) || 25));
         logMacroAction({ id: "DownstreamKeyerRate", downstreamKeyerIndex: String(dsk.id), rate: String(dsk.rate) });
-        notify("dskRate", false);
+        notify("dskRate", false, { dsk: dsk.id });
         return true;
     }
 
@@ -1036,7 +1345,7 @@ const SwitcherEngine = (() => {
         if (dsk.maskLinked) {
             logMacroAction({ id: `DownstreamKeyerMask${p[3]}`, downstreamKeyerIndex: dskIdx, [p[5]]: String(dsk[p[1]]) });
         }
-        notify("dskMask", false);
+        notify("dskMask", false, { dsk: dsk.id });
         return true;
     }
 
@@ -1079,7 +1388,7 @@ const SwitcherEngine = (() => {
         state.generators[genId] = safeHex;
         const item = state.colors?.find(c => c.id === genId);
         if (item) item.color = safeHex;
-        notify("generatorColor", false);
+        notify("generatorColor", false, { genId });
         return true;
     }
 
@@ -1253,7 +1562,7 @@ const SwitcherEngine = (() => {
         if (!VALID_MV_LAYOUTS.has(layout)) return false;
         const mv = getMultiView(mvIndex);
         mv.layout = layout;
-        notify("multiView", true);
+        notify("multiView", true, { mv: Number.isInteger(mv.id) ? mv.id : (parseInt(mvIndex, 10) || 0) });
         return true;
     }
 
@@ -1261,7 +1570,7 @@ const SwitcherEngine = (() => {
         if (!["swapPvwPgm", "safeArea", "vuMeters"].includes(key)) return false;
         const mv = getMultiView(mvIndex);
         mv[key] = !!value;
-        notify("multiView", true);
+        notify("multiView", true, { mv: Number.isInteger(mv.id) ? mv.id : (parseInt(mvIndex, 10) || 0), key });
         return true;
     }
 
@@ -1270,7 +1579,7 @@ const SwitcherEngine = (() => {
         const wIdx = parseInt(winIndex, 10);
         if (!Number.isFinite(wIdx) || wIdx < 0 || wIdx >= 16) return false;
         mv.windows[wIdx] = String(sourceId ?? "");
-        notify("multiView", true);
+        notify("multiViewWindow", true, { mv: Number.isInteger(mv.id) ? mv.id : (parseInt(mvIndex, 10) || 0), win: wIdx });
         return true;
     }
 
@@ -1291,7 +1600,7 @@ const SwitcherEngine = (() => {
         if (!layer) return false;
         layer.x = Math.max(-16, Math.min(16, Number(x) || 0));
         layer.y = Math.max(-9, Math.min(9, Number(y) || 0));
-        notify("layerPos", true);
+        notify("layerPos", true, ws.type === "superSource" ? { ss: ws.resourceId, box: idx } : { me: ws.resourceId, usk: idx });
         return true;
     }
 
@@ -1299,7 +1608,7 @@ const SwitcherEngine = (() => {
         const layer = getLayerFromWorkspace(ws, idx, group);
         if (!layer) return false;
         layer.size = Math.max(0.1, Math.min(1.0, Number(size) || 0.5));
-        notify("layerSize", true);
+        notify("layerSize", true, ws.type === "superSource" ? { ss: ws.resourceId, box: idx } : { me: ws.resourceId, usk: idx });
         return true;
     }
 
@@ -1307,7 +1616,7 @@ const SwitcherEngine = (() => {
         const layer = getLayerFromWorkspace(ws, idx, "usk");
         if (!layer?.keySettings?.luma) return false;
         layer.keySettings.luma[key] = val;
-        notify(key === "clip" ? "lumaClip" : key === "gain" ? "lumaGain" : "lumaInvert", true);
+        notify(key === "clip" ? "lumaClip" : key === "gain" ? "lumaGain" : "lumaInvert", true, { me: ws.resourceId, usk: idx });
         return true;
     }
 
@@ -1315,7 +1624,7 @@ const SwitcherEngine = (() => {
         const layer = getLayerFromWorkspace(ws, idx, "usk");
         if (!layer?.keySettings?.linear) return false;
         layer.keySettings.linear[key] = val;
-        notify(key === "clip" ? "linearClip" : key === "gain" ? "linearGain" : "linearKey", true);
+        notify(key === "clip" ? "linearClip" : key === "gain" ? "linearGain" : "linearKey", true, { me: ws.resourceId, usk: idx });
         return true;
     }
 
@@ -1323,7 +1632,7 @@ const SwitcherEngine = (() => {
         const layer = getLayerFromWorkspace(ws, idx, "usk");
         if (!layer?.keySettings?.chroma) return false;
         layer.keySettings.chroma[key] = val;
-        notify(key === "sampleColor" ? "chromaColor" : key === "spill" ? "chromaSpill" : "chromaCorrection", true);
+        notify(key === "sampleColor" ? "chromaColor" : key === "spill" ? "chromaSpill" : "chromaCorrection", true, { me: ws.resourceId, usk: idx });
         return true;
     }
 
@@ -1331,7 +1640,7 @@ const SwitcherEngine = (() => {
         const layer = getLayerFromWorkspace(ws, idx, "usk");
         if (!layer?.keySettings?.pattern) return false;
         layer.keySettings.pattern[key] = val;
-        notify("patternSize", true);
+        notify("patternSize", true, { me: ws.resourceId, usk: idx });
         return true;
     }
 
@@ -1346,7 +1655,7 @@ const SwitcherEngine = (() => {
         const host = getCropHost(ws, idx, group);
         if (!host) return false;
         host.cropEnabled = !!enabled;
-        notify("layerCropToggle", true);
+        notify("layerCropToggle", true, ws.type === "superSource" ? { ss: ws.resourceId, box: idx } : { me: ws.resourceId, usk: idx });
         return true;
     }
 
@@ -1378,7 +1687,7 @@ const SwitcherEngine = (() => {
         const layer = getLayerFromWorkspace(ws, idx, group);
         if (!layer) return false;
         layer.maskEnabled = !!enabled;
-        notify("layerMaskToggle", true);
+        notify("layerMaskToggle", true, ws.type === "me" ? { me: ws.resourceId, usk: idx } : { ss: ws.resourceId, box: idx });
         return true;
     }
 
@@ -1386,7 +1695,7 @@ const SwitcherEngine = (() => {
         const dsk = getDSK(dskIdx);
         if (!dsk?.keySettings?.linear) return false;
         dsk.keySettings.linear.premultiplied = !!val;
-        notify("dskParam", true);
+        notify("dskParam", true, { dsk: dsk.id });
         return true;
     }
 
@@ -1395,7 +1704,7 @@ const SwitcherEngine = (() => {
         if (!dsk?.keySettings) return false;
         dsk.keySettings.linear.invert = !!val;
         dsk.keySettings.luma.invert = !!val;
-        notify("dskParam", true);
+        notify("dskParam", true, { dsk: dsk.id });
         return true;
     }
 
@@ -1405,7 +1714,7 @@ const SwitcherEngine = (() => {
         const c = Math.max(0, Math.min(100, Number(val) || 0));
         dsk.keySettings.linear.clip = c;
         dsk.keySettings.luma.clip = c;
-        notify("dskClip", true);
+        notify("dskClip", true, { dsk: dsk.id });
         return true;
     }
 
@@ -1415,7 +1724,7 @@ const SwitcherEngine = (() => {
         const g = Math.max(0, Math.min(100, Number(val) || 0));
         dsk.keySettings.linear.gain = g;
         dsk.keySettings.luma.gain = g;
-        notify("dskGain", true);
+        notify("dskGain", true, { dsk: dsk.id });
         return true;
     }
 
@@ -1423,7 +1732,7 @@ const SwitcherEngine = (() => {
         const dsk = getDSK(dskIdx);
         if (!dsk) return false;
         dsk.maskEnabled = !!val;
-        notify("dskMaskToggle", true);
+        notify("dskMaskToggle", true, { dsk: dsk.id });
         return true;
     }
 
@@ -1431,7 +1740,7 @@ const SwitcherEngine = (() => {
         const mp = state.mediaPlayers?.[mpIndex];
         if (!mp) return false;
         mp.mediaId = (mediaId === null || mediaId === undefined || mediaId === "") ? null : Number(mediaId);
-        notify("mediaPlayer", true);
+        notify("mediaPlayer", true, { mp: mpIndex });
         return true;
     }
 
@@ -1489,6 +1798,11 @@ const SwitcherEngine = (() => {
         setSuperSourceArt,
         applySuperSourcePreset,
         SUPERSOURCE_PRESETS,
+        getSSAnimSettings,
+        setSSAnimSettings,
+        animateSuperSourceTo,
+        commitSuperSourceState,
+        cancelSuperSourceAnimation,
         selectDSK,
         setDSKFill,
         setDSKKey,

@@ -106,8 +106,11 @@ const ShowTemplates = (() => {
         return [...BUILT_IN_SS_PRESETS, ...custom];
     }
 
-    function applySSPreset(ws, preset) {
+    function applySSPreset(ws, preset, opts = {}) {
         if (!ws || ws.type !== "superSource" || !preset?.boxes) return false;
+        if (opts.animate && typeof SwitcherEngine !== "undefined" && typeof SwitcherEngine.animateSuperSourceTo === "function") {
+            return SwitcherEngine.animateSuperSourceTo(ws, preset.boxes, opts);
+        }
         preset.boxes.forEach((cfg, idx) => {
             const box = ws.data?.boxes?.[idx];
             if (!box) return;
@@ -122,7 +125,7 @@ const ShowTemplates = (() => {
             box.cropRight = Number(cfg.cropRight ?? 0);
         });
         if (typeof SwitcherEngine !== "undefined") {
-            SwitcherEngine.notify("superSourcePreset", true);
+            SwitcherEngine.notify("superSourcePreset", true, { ss: ws.resourceId });
         }
         return true;
     }

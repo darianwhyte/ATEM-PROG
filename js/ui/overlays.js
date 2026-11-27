@@ -142,15 +142,18 @@ const OverlaysUI = (() => {
 
             <div style="padding-top:10px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:8px;">
                 <span class="section-label">Pull / Push Show Configuration</span>
-                <button class="btn" id="btnDrvPull" ${b.atemConnected ? "" : "disabled"}>⬇ Pull Full Config from ATEM</button>
+                <button class="btn" id="btnDrvPull" ${b.atemConnected ? "" : "disabled"}>⬇ Pull Full Config (Incl. Bus Mapping &amp; Macros)</button>
+                <button class="btn btn-accent-soft" id="btnDrvPullMacros" ${b.atemConnected ? "" : "disabled"}>⬇ Pull Macros Only from ATEM</button>
 
                 <div style="padding:10px; border-radius:8px; background:var(--bg-elevated); border:1px solid var(--border); display:flex; flex-direction:column; gap:7px;">
                     <div class="section-label">Selective Push to Hardware</div>
                     <label class="check-row"><input type="checkbox" id="chkPushInputs" checked> Input Long & Short Labels</label>
-                    <label class="check-row"><input type="checkbox" id="chkPushAux" checked> Aux Output Routes</label>
+                    <label class="check-row"><input type="checkbox" id="chkPushAux" checked> Aux Output Routes &amp; Labels</label>
+                    <label class="check-row"><input type="checkbox" id="chkPushColors" checked> Color Generators</label>
                     <label class="check-row"><input type="checkbox" id="chkPushME"> M/E Program & Preview</label>
                     <label class="check-row"><input type="checkbox" id="chkPushSS"> SuperSource Box Layouts</label>
-                    <label class="check-row"><input type="checkbox" id="chkPushMV"> Multi-View Window Assignments</label>
+                    <label class="check-row"><input type="checkbox" id="chkPushDSK"> Downstream Keyers (Fill, Key, Mask)</label>
+                    <label class="check-row"><input type="checkbox" id="chkPushMV"> Multi-View Layout &amp; Windows</label>
                     <button class="btn btn-amber" id="btnDrvPush" ${b.atemConnected ? "" : "disabled"}>⬆ Push Selected to Live ATEM</button>
                 </div>
             </div>
@@ -188,6 +191,7 @@ const OverlaysUI = (() => {
         root.querySelector("#btnDrvDisconnect")?.addEventListener("click", () => AtemBridge.disconnect());
         root.querySelector("#chkDrvLiveSync")?.addEventListener("change", (e) => AtemBridge.setLiveSync(e.target.checked));
         root.querySelector("#btnDrvPull")?.addEventListener("click", () => AtemBridge.pullFullConfig());
+        root.querySelector("#btnDrvPullMacros")?.addEventListener("click", () => AtemBridge.pullHardwareMacros());
         root.querySelector("#btnDrvPush")?.addEventListener("click", () => {
             if (!confirm("Push selected settings to the connected live ATEM switcher?")) return;
             AtemBridge.pushConfig({

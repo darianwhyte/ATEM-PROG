@@ -1363,6 +1363,9 @@ const ViewSwitcher = (() => {
             if (presetSSIndex >= ssList.length) presetSSIndex = 0;
             const activeSS = ssList[presetSSIndex];
             const presets = ShowTemplates.getAllSSPresets();
+            const animCfg = typeof SwitcherEngine?.getSSAnimSettings === "function"
+                ? SwitcherEngine.getSSAnimSettings()
+                : { enabled: false, durationMs: 600, easing: "easeInOut", offBoxMode: "shrink" };
 
             const rightHtml = `
                 ${ssList.length > 1 ? `
@@ -1370,10 +1373,34 @@ const ViewSwitcher = (() => {
                         ${ssList.map((ss, idx) => `<button class="seg-item ${idx === presetSSIndex ? "active" : ""}" data-sw-ss-idx="${idx}">${esc(ss.name)}</button>`).join("")}
                     </div>
                 ` : `<span class="badge cyan">${esc(activeSS.name)}</span>`}
+                <button class="btn btn-xs ${animCfg.enabled ? "btn-accent-soft" : ""}" id="btnSwSSAnimToggle" title="Toggle Cut vs Merge Animate on SuperSource presets">${animCfg.enabled ? "✨ Anim" : "Cut"}</button>
                 <button class="btn btn-xs btn-accent-soft" data-sw-save-ss-preset title="Save current ${esc(activeSS.name)} box layout as a preset">+ Save</button>
                 <button class="btn btn-xs btn-ghost" data-sw-open-compose-ss="${activeSS.id}">Compose →</button>
             `;
+            const animBarHtml = `
+                <div class="field-row" style="gap:6px; flex-wrap:wrap; margin-bottom:8px; padding:6px 8px; border-radius:6px; background:var(--bg-elevated); border:1px solid var(--border); font-size:11px;">
+                    <span class="muted" style="font-weight:700;">Merge:</span>
+                    <select id="selSwSSAnimDur" style="width:auto; padding:2px 6px; font-size:11px;" title="Animation Duration">
+                        ${[250, 500, 600, 750, 1000, 1500, 2000].map(ms => `<option value="${ms}" ${animCfg.durationMs === ms ? "selected" : ""}>${ms >= 1000 ? `${ms / 1000}s` : `${ms}ms`}</option>`).join("")}
+                    </select>
+                    <select id="selSwSSAnimEase" style="width:auto; padding:2px 6px; font-size:11px;" title="Easing Curve">
+                        <option value="easeInOut" ${animCfg.easing === "easeInOut" ? "selected" : ""}>Smooth In-Out</option>
+                        <option value="easeOut" ${animCfg.easing === "easeOut" ? "selected" : ""}>Ease Out</option>
+                        <option value="easeIn" ${animCfg.easing === "easeIn" ? "selected" : ""}>Ease In</option>
+                        <option value="linear" ${animCfg.easing === "linear" ? "selected" : ""}>Linear</option>
+                        <option value="overshoot" ${animCfg.easing === "overshoot" ? "selected" : ""}>Overshoot</option>
+                    </select>
+                    <select id="selSwSSAnimOff" style="width:auto; padding:2px 6px; font-size:11px;" title="Off-Air Boxes Entry/Exit">
+                        <option value="shrink" ${animCfg.offBoxMode === "shrink" ? "selected" : ""}>Off: Zoom (ATEM)</option>
+                        <option value="slide" ${animCfg.offBoxMode === "slide" ? "selected" : ""}>Off: Slide (ATEM)</option>
+                        <option value="crop" ${animCfg.offBoxMode === "crop" ? "selected" : ""}>Off: Crop (ATEM)</option>
+                        <option value="fade" ${animCfg.offBoxMode === "fade" ? "selected" : ""}>Off: Fade (Canvas)</option>
+                        <option value="cut" ${animCfg.offBoxMode === "cut" ? "selected" : ""}>Off: Cut</option>
+                    </select>
+                </div>
+            `;
             const body = `
+                ${animBarHtml}
                 <div class="sw-ss-preset-grid">
                     ${presets.map(p => `
                         <div class="ss-preset-card ${lastAppliedSSPresetId === p.id ? "active" : ""}" data-sw-apply-ss="${esc(p.id)}" title="Apply ${esc(p.name)} to ${esc(activeSS.name)}">
@@ -2326,15 +2353,30 @@ const ViewSwitcher = (() => {
                 render(container);
             });
         });
+        container.querySelector("#btnSwSSAnimToggle")?.addEventListener("click", () => {
+            const cur = SwitcherEngine.getSSAnimSettings?.() || { enabled: false };
+            SwitcherEngine.setSSAnimSettings?.({ enabled: !cur.enabled });
+            render(container);
+        });
+        container.querySelector("#selSwSSAnimDur")?.addEventListener("change", (e) => {
+            SwitcherEngine.setSSAnimSettings?.({ durationMs: Number(e.target.value) || 600 });
+        });
+        container.querySelector("#selSwSSAnimEase")?.addEventListener("change", (e) => {
+            SwitcherEngine.setSSAnimSettings?.({ easing: e.target.value });
+        });
+        container.querySelector("#selSwSSAnimOff")?.addEventListener("change", (e) => {
+            SwitcherEngine.setSSAnimSettings?.({ offBoxMode: e.target.value });
+        });
         container.querySelectorAll("[data-sw-apply-ss]").forEach(card => {
             card.addEventListener("click", () => {
                 const ssList = state.workspaces.filter(w => w.type === "superSource" && isWorkspaceAvailable(w));
                 const activeSS = ssList[presetSSIndex] || ssList[0];
                 const preset = ShowTemplates.getAllSSPresets().find(p => p.id === card.dataset.swApplySs);
                 if (activeSS && preset) {
-                    ShowTemplates.applySSPreset(activeSS, preset);
+                    const animCfg = SwitcherEngine.getSSAnimSettings?.() || { enabled: false };
+                    ShowTemplates.applySSPreset(activeSS, preset, { animate: !!animCfg.enabled });
                     lastAppliedSSPresetId = preset.id;
-                    AppUI.toast(`Applied "${preset.name}" to ${activeSS.name}`, "ok");
+                    AppUI.toast(`${animCfg.enabled ? "Animating" : "Applied"} "${preset.name}" on ${activeSS.name}`, "ok");
                 }
             });
         });

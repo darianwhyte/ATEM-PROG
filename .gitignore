@@ -12,3 +12,6 @@ Thumbs.db
 desktop.ini
 *.log
 .vscode/
+
+#ATEM SDK reference
+Blackmagic ATEM SDK 11.0.1/

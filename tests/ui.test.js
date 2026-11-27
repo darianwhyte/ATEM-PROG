@@ -451,6 +451,198 @@ const AtemUiTestSuite = (() => {
                             iframe.remove();
                         }
                     }
+                },
+                {
+                    name: "2-way Hardware Bridge syncs SuperSource box moves/crop, Transition style/rate/next/prev, DSK fill/key/rate, and Hardware Macros",
+                    fn() {
+                        assert(!!profiles["ATEM 4 M/E Constellation HD"], "ATEM 4 M/E Constellation HD profile exists");
+                        resetFreshProfile("ATEM 4 M/E Constellation HD");
+
+                        // Verify exact notification metadata on SwitcherEngine mutations used for 2-way Live Sync
+                        const events = [];
+                        const unsub = SwitcherEngine.subscribe(ev => events.push(ev));
+                        try {
+                            const ss1 = state.workspaces.find(w => w.type === "superSource" && w.resourceId === 0);
+                            const me1 = state.workspaces.find(w => w.type === "me" && w.resourceId === 0);
+                            SwitcherEngine.setLayerPosition(ss1, 1, -6.5, 3.25, "box");
+                            SwitcherEngine.setLayerSize(ss1, 1, 0.42, "box");
+                            SwitcherEngine.setLayerCropEnabled(ss1, 1, true, "box");
+                            SwitcherEngine.setLayerCropEdge(ss1, 1, "left", 1500, "box");
+                            SwitcherEngine.setTransitionStyle(me1, "DVE");
+                            SwitcherEngine.setTransitionRate(me1, 35);
+                            SwitcherEngine.toggleNextTransitionKey(me1, 1);
+                            SwitcherEngine.setPreviewTransition(me1, true);
+                            SwitcherEngine.setDSKFill(0, "input7");
+                            SwitcherEngine.setDSKKey(0, "input8");
+                            SwitcherEngine.setDSKRate(0, 18);
+                            ShowTemplates.applySSPreset(ss1, ShowTemplates.BUILT_IN_SS_PRESETS[0]);
+
+                            assert(events.some(e => e.reason === "layerPos" && e.ss === 0 && e.box === 1), "layerPos includes ss/box metadata");
+                            assert(events.some(e => e.reason === "layerSize" && e.ss === 0 && e.box === 1), "layerSize includes ss/box metadata");
+                            assert(events.some(e => e.reason === "layerCrop" && e.ss === 0 && e.box === 1), "layerCrop includes ss/box metadata");
+                            assert(events.some(e => e.reason === "transitionStyle" && e.me === 0), "transitionStyle includes me metadata");
+                            assert(events.some(e => e.reason === "nextTransition" && e.me === 0), "nextTransition includes me metadata");
+                            assert(events.some(e => e.reason === "previewTransition" && e.me === 0), "previewTransition includes me metadata");
+                            assert(events.some(e => e.reason === "dskFill" && e.dsk === 0), "dskFill includes dsk metadata");
+                            assert(events.some(e => e.reason === "dskKey" && e.dsk === 0), "dskKey includes dsk metadata");
+                            assert(events.some(e => e.reason === "superSourcePreset" && e.ss === 0), "superSourcePreset includes ss metadata");
+                        } finally {
+                            unsub();
+                        }
+
+                        // Wait-free inbound Live Sync check (fullPull: false) using a different box index (box 2) so outbound guard does not block
+                        AtemBridge.applyHardwareSnapshot({
+                            product: "ATEM 4 M/E Constellation HD",
+                            mixEffects: [{
+                                index: 0,
+                                programInput: 3,
+                                previewInput: 4,
+                                transitionStyle: 2, // Wipe
+                                transitionRate: 44,
+                                nextSelection: [1, 4], // BKGD + K2
+                                previewTransition: false,
+                                ftbFullyBlack: false,
+                                usks: []
+                            }],
+                            downstreamKeyers: [{
+                                index: 0,
+                                onAir: true,
+                                tie: true,
+                                rate: 22,
+                                fillSource: 5,
+                                keySource: 6
+                            }],
+                            superSources: [{
+                                index: 0,
+                                artFillSource: 3010,
+                                artCutSource: 3011,
+                                artOption: 1,
+                                boxes: [{
+                                    index: 2,
+                                    enabled: true,
+                                    source: 9,
+                                    x: -4.25,
+                                    y: 2.5,
+                                    size: 0.38,
+                                    cropped: true,
+                                    cropTop: 100,
+                                    cropBottom: 200,
+                                    cropLeft: 300,
+                                    cropRight: 400
+                                }]
+                            }]
+                        }, { fullPull: false });
+
+                        const me1 = state.workspaces.find(w => w.type === "me" && w.resourceId === 0);
+                        const ss1 = state.workspaces.find(w => w.type === "superSource" && w.resourceId === 0);
+                        const dsk0 = getDSK(0);
+                        assertEqual(me1.data.transitionStyle, "Wipe", "Live hardware snapshot syncs M/E transitionStyle");
+                        assertEqual(me1.data.transitionRate, 44, "Live hardware snapshot syncs M/E transitionRate");
+                        assertEqual(me1.data.nextTransition.bkgd, true, "Live hardware snapshot syncs BKGD nextTransition");
+                        assertEqual(me1.data.nextTransition.usk[1], true, "Live hardware snapshot syncs K2 nextTransition");
+                        assertEqual(dsk0.source, "input5", "Live hardware snapshot syncs DSK fillSource");
+                        assertEqual(dsk0.keySource, "input6", "Live hardware snapshot syncs DSK keySource");
+                        assertEqual(dsk0.rate, 22, "Live hardware snapshot syncs DSK rate");
+                        assertEqual(ss1.data.artPlace, "Foreground", "Live hardware snapshot syncs SS Art Place");
+                        assertEqual(ss1.data.boxes[2].x, -4.25, "Live hardware snapshot syncs SS Box 3 X");
+                        assertEqual(ss1.data.boxes[2].y, 2.5, "Live hardware snapshot syncs SS Box 3 Y");
+                        assertEqual(ss1.data.boxes[2].size, 0.38, "Live hardware snapshot syncs SS Box 3 Size");
+                        assertEqual(ss1.data.boxes[2].cropEnabled, true, "Live hardware snapshot syncs SS Box 3 Crop flag");
+                        assertEqual(ss1.data.boxes[2].cropLeft, 300, "Live hardware snapshot syncs SS Box 3 CropLeft");
+
+                        // Hardware macro download handler imports both XML and binary-decoded macros cleanly
+                        const pulledCount = AtemBridge.handleIncomingHardwareMacros([
+                            {
+                                index: 0,
+                                name: "Constellation Cut",
+                                description: "Hardware binary macro",
+                                format: "binary",
+                                ops: [
+                                    { id: "ProgramInput", mixEffectBlockIndex: "0", source: "Camera3" },
+                                    { id: "MacroSleep", frames: "12" }
+                                ]
+                            },
+                            {
+                                index: 4,
+                                name: "XML Key",
+                                description: "Hardware XML macro",
+                                format: "xml",
+                                xml: `<Macro index="4" name="XML Key"><Op id="KeyOnAir" mixEffectBlockIndex="0" keyIndex="0" onAir="True"/></Macro>`
+                            }
+                        ]);
+                        assertEqual(pulledCount, 2, "Imported 2 hardware macros");
+                        assertEqual(state.macros[0].name, "Constellation Cut", "Binary hardware macro saved to slot 0");
+                        assertEqual(state.macros[0].ops.length, 2, "Binary hardware macro preserved 2 ops");
+                        assertEqual(state.macros[4].ops[0].id, "UpstreamKeyerEnabled", "XML hardware macro translated KeyOnAir op");
+                    }
+                },
+                {
+                    name: "SuperSource stacks Box 1 above Box 4, Compose Offline Stage isolates live state until Cut, and Merge Animator animates cleanly",
+                    async fn() {
+                        const stage = getStage();
+                        resetFreshProfile("ATEM 2 M/E Constellation HD");
+
+                        // 1. Canvas & DOM stack order: Box 1 (red color1) must sit on top of Box 4 (green color2)
+                        const ss1 = state.workspaces.find(w => w.type === "superSource" && w.resourceId === 0);
+                        SwitcherEngine.setGeneratorColor("color1", "#ff0000");
+                        SwitcherEngine.setGeneratorColor("color2", "#00ff00");
+                        ss1.data.boxes[0] = { ...ss1.data.boxes[0], enabled: true, source: "color1", x: 0, y: 0, size: 0.6 };
+                        ss1.data.boxes[3] = { ...ss1.data.boxes[3], enabled: true, source: "color2", x: 0, y: 0, size: 0.6 };
+
+                        const canvas = document.createElement("canvas");
+                        canvas.width = 320;
+                        canvas.height = 180;
+                        const ctx = canvas.getContext("2d");
+                        CanvasRenderer.renderSuperSource(ctx, ss1);
+                        const px = ctx.getImageData(160, 90, 1, 1).data;
+                        assert(px[0] > 200 && px[1] < 40, `Center pixel should be Box 1 red (${px[0]},${px[1]},${px[2]})`);
+
+                        // 2. Compose DOM stack z-index & Offline Stage isolation
+                        ViewCompose.resetSelection();
+                        ViewCompose.render(stage);
+                        const b1El = stage.querySelector('[data-drag-kind="box"][data-drag-idx="0"]');
+                        const b4El = stage.querySelector('[data-drag-kind="box"][data-drag-idx="3"]');
+                        assert(Number(b1El.style.zIndex) > Number(b4El.style.zIndex), "Box 1 overlay has higher z-index than Box 4");
+
+                        stage.querySelector("#btnCmpModeStage").click();
+                        assertEqual(ViewCompose.getEditMode(), "stage", "Compose switched to Offline Stage mode");
+                        assert(!!stage.querySelector("#cmpStageActionBar"), "Offline Stage action bar visible");
+
+                        // Switch to Transform tab and drag/adjust Box 1 X slider inside Stage mode
+                        stage.querySelector('[data-itab="transform"]').click();
+                        const posXInp = stage.querySelector("#cmpPosX");
+                        posXInp.value = "-9.5";
+                        posXInp.dispatchEvent(new Event("input", { bubbles: true }));
+                        assertEqual(ss1.data.boxes[0].x, 0, "Live state Box 1 X untouched while in Offline Stage mode");
+
+                        // Cut Stage to Live -> updates live state
+                        stage.querySelector("#btnCmpCommitCut").click();
+                        assertEqual(ss1.data.boxes[0].x, -9.5, "Cut to Live committed staged Box 1 X to live state");
+
+                        // 3. SuperSource Merge Animator (shrink & fade modes)
+                        const okShrink = await SwitcherEngine.animateSuperSourceTo(ss1, [
+                            { enabled: true, x: -8, y: 0, size: 0.45 },
+                            { enabled: true, x: 8, y: 0, size: 0.45 },
+                            { enabled: false },
+                            { enabled: false }
+                        ], { durationMs: 45, easing: "easeOut", offBoxMode: "shrink" });
+                        assertEqual(okShrink, true, "animateSuperSourceTo shrink resolved true");
+                        assertEqual(ss1.data.boxes[0].x, -8, "Animated Box 1 to target X");
+                        assertEqual(ss1.data.boxes[1].enabled, true, "Animated Box 2 ON");
+                        assertEqual(ss1.data.boxes[3].enabled, false, "Animated Box 4 OFF");
+
+                        const okFade = await SwitcherEngine.animateSuperSourceTo(ss1, [
+                            { enabled: true, x: 0, y: 0, size: 0.9 },
+                            { enabled: false },
+                            { enabled: false },
+                            { enabled: false }
+                        ], { durationMs: 45, easing: "linear", offBoxMode: "fade" });
+                        assertEqual(okFade, true, "animateSuperSourceTo fade resolved true");
+                        assertEqual(ss1.data.boxes[0].size, 0.9, "Animated Box 1 to target size");
+                        assertEqual(ss1.data.boxes[1]._animAlpha, undefined, "Fade animation cleaned up _animAlpha");
+
+                        ViewCompose.resetSelection();
+                    }
                 }
             ]
         }

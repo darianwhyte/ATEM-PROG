@@ -914,6 +914,8 @@ const CanvasRenderer = (() => {
                 targetCtx.save();
                 if (!isSSBox) {
                     targetCtx.globalAlpha = source ? KEYER_STACK_ALPHA : 0.35;
+                } else if (typeof layer._animAlpha === "number") {
+                    targetCtx.globalAlpha = Math.max(0, Math.min(1, layer._animAlpha));
                 }
                 targetCtx.drawImage(layerCanvas, sourceX, sourceY, sourceW, sourceH, croppedX, croppedY, croppedW, croppedH);
                 targetCtx.restore();
@@ -1199,14 +1201,15 @@ const CanvasRenderer = (() => {
                 renderSuperSourceArtLayer(workspace.data, ssCanvas, renderStack);
             }
 
-            // 2. Boxes 1–4
+            // 2. Boxes 4 -> 1 (Box 4 at bottom, Box 1 topmost matching Blackmagic ATEM hardware)
             if (workspace.data.boxes) {
-                workspace.data.boxes.forEach(box => {
-                    if (!box.enabled) return;
+                for (let i = workspace.data.boxes.length - 1; i >= 0; i--) {
+                    const box = workspace.data.boxes[i];
+                    if (!box?.enabled) continue;
                     const boxSource = getSourceById(box.source);
-                    if (!boxSource) return;
+                    if (!boxSource) continue;
                     compositeLayerOntoContext(ssCtx, targetCanvas.width, targetCanvas.height, box, boxSource, renderStack);
-                });
+                }
             }
 
             // 3. Foreground Art (keyed on top of Boxes 1–4)
@@ -1901,6 +1904,11 @@ function renderMasterPreviewFrame() {
 
     function renderME(ctx, ws, opts = {}) {
         if (!ctx?.canvas || !ws) return;
+        const origWsData = ws.data;
+        const origDsks = state.dsks;
+        if (opts.overrideWsData) ws.data = opts.overrideWsData;
+        if (Array.isArray(opts.overrideDsks)) state.dsks = opts.overrideDsks;
+
         const forceUskIdx = Number.isInteger(opts.forceShowUskIndex) ? opts.forceShowUskIndex : -1;
         const forceDskIdx = Number.isInteger(opts.forceShowDskIndex) ? opts.forceShowDskIndex : -1;
         const uskArr = ws.data?.usk || [];
@@ -1935,11 +1943,15 @@ function renderMasterPreviewFrame() {
                 targetDsk.enabled = origDskEnabled;
                 targetDsk.tie = origDskTie;
             }
+            ws.data = origWsData;
+            state.dsks = origDsks;
         }
     }
 
     function renderSuperSource(ctx, ws, opts = {}) {
         if (!ctx?.canvas || !ws) return;
+        const origWsData = ws.data;
+        if (opts.overrideData) ws.data = opts.overrideData;
         const forceBoxIdx = Number.isInteger(opts.forceShowBoxIndex) ? opts.forceShowBoxIndex : -1;
         const targetBox = forceBoxIdx >= 0 ? ws.data?.boxes?.[forceBoxIdx] : null;
         const origBoxEnabled = targetBox ? targetBox.enabled : null;
@@ -1954,6 +1966,7 @@ function renderMasterPreviewFrame() {
             renderSourceRaster(src, ctx.canvas, []);
         } finally {
             if (targetBox && origBoxEnabled !== null) targetBox.enabled = origBoxEnabled;
+            ws.data = origWsData;
         }
     }
 

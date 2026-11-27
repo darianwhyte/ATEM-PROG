@@ -52,15 +52,26 @@ const MacroPlayer = (() => {
         MacroEngine.ensureMacroPool();
         const macro = state.macros[macroIndex];
 
-        if (
-            !MacroEngine.isValidMacroSlot(macroIndex) ||
-            !macro?.ops?.length ||
-            isPlaying
-        ) {
+        if (!MacroEngine.isValidMacroSlot(macroIndex) || !macro || isPlaying) {
             return false;
         }
 
         const isLive = mode === "live";
+        const bridgeSt = typeof AtemBridge !== "undefined" ? AtemBridge.getStatus() : {};
+        const canRunHardware = isLive && bridgeSt.atemConnected && bridgeSt.liveSyncEnabled && macro._hardwareSlot;
+
+        if (!macro.ops?.length) {
+            if (canRunHardware) {
+                AtemBridge.runHardwareMacro(macroIndex);
+                onComplete?.({ aborted: false, mode });
+                return true;
+            }
+            return false;
+        }
+
+        if (canRunHardware) {
+            AtemBridge.runHardwareMacro(macroIndex);
+        }
         isPlaying = true;
         abortPlayback = false;
 

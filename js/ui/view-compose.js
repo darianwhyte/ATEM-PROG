@@ -9,14 +9,34 @@
 // =========================================================================
 
 const ViewCompose = (() => {
+    const EDIT_MODE_KEY = "atem_prog_compose_edit_mode_v1";
     let selectedWsId = null;     // workspace.id (4/5 = SS1/2, 0..3 = ME1..4)
     let selectedTarget = { kind: "box", index: 0 }; // "box" | "art" | "bg" | "usk" | "dsk"
     let inspectorTab = "source"; // "source" | "transform" | "style"
     let stageBusMode = "program"; // "program" | "preview"
+    let composeEditMode = "live"; // "live" | "stage"
+    try {
+        const savedMode = localStorage.getItem(EDIT_MODE_KEY);
+        if (savedMode === "stage" || savedMode === "live") composeEditMode = savedMode;
+    } catch {}
+    let stagedDrafts = {};       // { [ws.id]: { data, dsks, dves } }
     let previewSelected = true;   // Non-destructively preview the currently edited USK/DSK/Box even when off-air
     let showGuides = true;
     let showSafeArea = true;
     let snapEnabled = true;
+
+    function cloneObj(o) {
+        return JSON.parse(JSON.stringify(o));
+    }
+
+    function isStageMode() {
+        return composeEditMode === "stage";
+    }
+
+    function setComposeEditMode(mode) {
+        composeEditMode = mode === "stage" ? "stage" : "live";
+        try { localStorage.setItem(EDIT_MODE_KEY, composeEditMode); } catch {}
+    }
 
     function focusDSK(dskIndex = 0) {
         selectedWsId = 0;
@@ -29,6 +49,41 @@ const ViewCompose = (() => {
         selectedTarget = { kind: "box", index: 0 };
         inspectorTab = "source";
         stageBusMode = "program";
+        composeEditMode = "live";
+        stagedDrafts = {};
+    }
+
+    function ensureDraftForWs(liveWs) {
+        if (!liveWs) return null;
+        if (!stagedDrafts[liveWs.id]) {
+            stagedDrafts[liveWs.id] = {
+                data: cloneObj(liveWs.data),
+                dsks: liveWs.type === "me" ? cloneObj(state.dsks || []) : null,
+                dves: liveWs.type === "me" ? cloneObj(state.resources?.dves || []) : null
+            };
+        }
+        return stagedDrafts[liveWs.id];
+    }
+
+    function getEditWs(liveWs) {
+        if (!liveWs || !isStageMode()) return liveWs;
+        const draft = ensureDraftForWs(liveWs);
+        return { ...liveWs, data: draft.data };
+    }
+
+    function getEditDSK(liveWs, dskIdx) {
+        if (isStageMode() && liveWs) {
+            const draft = ensureDraftForWs(liveWs);
+            return draft.dsks?.find(d => d.id === Number(dskIdx)) || draft.dsks?.[dskIdx] || null;
+        }
+        return getDSK(dskIdx);
+    }
+
+    function getEditCropHost(liveWs, layer, isSS) {
+        if (!layer) return null;
+        if (isSS) return layer;
+        const pool = isStageMode() ? ensureDraftForWs(liveWs)?.dves : state.resources?.dves;
+        return layer.dveId !== null && Array.isArray(pool) ? (pool.find(d => d.id === layer.dveId || d.assignedTo === layer.id) || null) : null;
     }
 
     function getAvailableWorkspaces() {
@@ -58,8 +113,8 @@ const ViewCompose = (() => {
         return !!u.enabled;
     }
 
-    function isDskVisibleOnStage(idx) {
-        const dsk = getDSK(idx);
+    function isDskVisibleOnStage(idx, liveWs = null) {
+        const dsk = getEditDSK(liveWs, idx);
         if (!dsk) return false;
         if (stageBusMode === "preview") {
             return dsk.enabled !== !!dsk.tie;
@@ -78,8 +133,8 @@ const ViewCompose = (() => {
             return !!(u && !isUskVisibleOnStage(ws, selectedTarget.index));
         }
         if (ws.type === "me" && ws.resourceId === 0 && selectedTarget.kind === "dsk") {
-            const d = getDSK(selectedTarget.index);
-            return !!(d && !isDskVisibleOnStage(selectedTarget.index));
+            const d = getEditDSK(ws, selectedTarget.index);
+            return !!(d && !isDskVisibleOnStage(selectedTarget.index, ws));
         }
         return false;
     }
@@ -92,7 +147,8 @@ const ViewCompose = (() => {
     }
 
     function syncLiveStageOverlays() {
-        const ws = getActiveComposeWs();
+        const liveWs = getActiveComposeWs();
+        const ws = getEditWs(liveWs);
         const frame = document.getElementById("composeStageFrame");
         if (!ws || !frame) return;
 
@@ -196,22 +252,27 @@ const ViewCompose = (() => {
     }
 
     function renderCanvas() {
-        const ws = getActiveComposeWs();
+        const liveWs = getActiveComposeWs();
         const canvas = document.getElementById("composeCanvas");
-        if (!canvas || !ws || typeof CanvasRenderer === "undefined") return;
+        if (!canvas || !liveWs || typeof CanvasRenderer === "undefined") return;
         const ctx = canvas.getContext("2d");
+        const draft = isStageMode() ? ensureDraftForWs(liveWs) : null;
 
-        if (ws.type === "superSource") {
+        if (liveWs.type === "superSource") {
             const forceShowBoxIndex = (previewSelected && selectedTarget.kind === "box") ? selectedTarget.index : -1;
-            CanvasRenderer.renderSuperSource(ctx, ws, { forceShowBoxIndex });
+            CanvasRenderer.renderSuperSource(ctx, liveWs, {
+                forceShowBoxIndex,
+                ...(draft ? { overrideData: draft.data } : {})
+            });
         } else {
             const forceShowUskIndex = (previewSelected && selectedTarget.kind === "usk") ? selectedTarget.index : -1;
-            const forceShowDskIndex = (previewSelected && ws.resourceId === 0 && selectedTarget.kind === "dsk") ? selectedTarget.index : -1;
-            CanvasRenderer.renderME(ctx, ws, {
+            const forceShowDskIndex = (previewSelected && liveWs.resourceId === 0 && selectedTarget.kind === "dsk") ? selectedTarget.index : -1;
+            CanvasRenderer.renderME(ctx, liveWs, {
                 mode: stageBusMode,
-                includeDSK: ws.resourceId === 0,
+                includeDSK: liveWs.resourceId === 0,
                 forceShowUskIndex,
-                forceShowDskIndex
+                forceShowDskIndex,
+                ...(draft ? { overrideWsData: draft.data, overrideDsks: draft.dsks } : {})
             });
         }
     }
@@ -224,7 +285,7 @@ const ViewCompose = (() => {
             return ws.data.usk?.[selectedTarget.index] || null;
         }
         if (selectedTarget.kind === "dsk") {
-            return getDSK(selectedTarget.index);
+            return getEditDSK(ws, selectedTarget.index);
         }
         return null;
     }
@@ -273,8 +334,8 @@ const ViewCompose = (() => {
         }
 
         if (selectedTarget.kind === "dsk") {
-            const dsk = getDSK(selectedTarget.index);
-            const liveVis = isDskVisibleOnStage(selectedTarget.index);
+            const dsk = getEditDSK(ws, selectedTarget.index);
+            const liveVis = isDskVisibleOnStage(selectedTarget.index, ws);
             const statusLbl = dsk?.enabled ? "ON AIR" : (dsk?.tie ? "TIED (PVW)" : (localPrev ? "OFF AIR · Edit Preview" : "OFF AIR"));
             return `
                 <div class="compose-stage-status ${localPrev ? "is-preview-override" : ""}">
@@ -318,19 +379,23 @@ const ViewCompose = (() => {
         const items = [];
 
         if (ws.type === "superSource") {
-            (ws.data.boxes || []).forEach((b, idx) => {
+            const boxes = ws.data.boxes || [];
+            // Box 4 at bottom (z=7) -> Box 1 on top (z=10), selected jumps above (z=20)
+            for (let idx = boxes.length - 1; idx >= 0; idx--) {
+                const b = boxes[idx];
                 const isSel = selectedTarget.kind === "box" && selectedTarget.index === idx;
                 const showThis = b.enabled || (isSel && previewSelected);
-                if (!showThis) return;
+                if (!showThis) continue;
                 const rect = atemToCanvas(b);
+                const zIdx = isSel ? 20 : (10 - idx);
                 items.push(`
                     <div class="stage-box ${isSel ? "selected" : ""} ${!b.enabled ? "off-air-preview" : ""}" data-drag-kind="box" data-drag-idx="${idx}"
-                         style="left:${rect.left}%; top:${rect.top}%; width:${rect.width}%; height:${rect.height}%;">
+                         style="left:${rect.left}%; top:${rect.top}%; width:${rect.width}%; height:${rect.height}%; z-index:${zIdx};">
                         <span class="stage-box-tag">B${idx + 1} · ${esc(getSourceShortName(b.source))}${!b.enabled ? " (PREVIEW)" : ""}</span>
                         ${isSel ? `<div class="stage-resize-handle" data-resize-kind="box" data-resize-idx="${idx}"></div>` : ""}
                     </div>
                 `);
-            });
+            }
         } else {
             const maxUsks = getUpstreamKeyersPerME(getProfile());
             (ws.data.usk || []).slice(0, maxUsks).forEach((u, idx) => {
@@ -423,7 +488,7 @@ const ViewCompose = (() => {
 
         // DSK target
         if (selectedTarget.kind === "dsk") {
-            const dsk = getDSK(selectedTarget.index);
+            const dsk = getEditDSK(ws, selectedTarget.index);
             if (!dsk) return "";
             if (inspectorTab === "style") {
                 return `
@@ -476,7 +541,7 @@ const ViewCompose = (() => {
         if (!layer) return "";
         const isSS = ws.type === "superSource";
         const hasDve = isSS || layer.keyType === "dve" || layer.flyingKey;
-        const dveObj = !isSS && layer.dveId !== null ? state.resources.dves.find(d => d.id === layer.dveId) : null;
+        const dveObj = getEditCropHost(ws, layer, isSS);
         const ntStaged = !isSS && !!(ws.data?.nextTransition?.usk?.[selectedTarget.index]);
         const bgSourceId = !isSS ? (stageBusMode === "preview" ? ws.data.previewSource : ws.data.source) : "";
         const sameAsBg = !isSS && layer.source && layer.source === bgSourceId;
@@ -660,9 +725,10 @@ const ViewCompose = (() => {
         `;
     }
 
-    function wireCanvasDrag(container, ws) {
+    function wireCanvasDrag(container, liveWs) {
         const frame = container.querySelector("#composeStageFrame");
         if (!frame) return;
+        const ws = getEditWs(liveWs);
 
         frame.addEventListener("pointerdown", (e) => {
             const resizeHandle = e.target.closest("[data-resize-kind]");
@@ -699,7 +765,8 @@ const ViewCompose = (() => {
                 if (isResize) {
                     let nextSize = Math.max(0.1, Math.min(1.0, startSize + dxPct));
                     if (snapEnabled) nextSize = Number((Math.round(nextSize * 100) / 100).toFixed(2));
-                    SwitcherEngine.setLayerSize(ws, idx, nextSize, group);
+                    if (isStageMode()) layer.size = nextSize;
+                    else SwitcherEngine.setLayerSize(liveWs, idx, nextSize, group);
                 } else {
                     let nextX = Math.max(-16, Math.min(16, startX + dxPct * 32));
                     let nextY = Math.max(-9, Math.min(9, startY - dyPct * 18));
@@ -707,7 +774,12 @@ const ViewCompose = (() => {
                         nextX = snap(nextX);
                         nextY = snap(nextY);
                     }
-                    SwitcherEngine.setLayerPosition(ws, idx, nextX, nextY, group);
+                    if (isStageMode()) {
+                        layer.x = nextX;
+                        layer.y = nextY;
+                    } else {
+                        SwitcherEngine.setLayerPosition(liveWs, idx, nextX, nextY, group);
+                    }
                 }
 
                 // Smoothly reposition overlay box immediately without full DOM rebuild
@@ -739,11 +811,19 @@ const ViewCompose = (() => {
         const savedTrayLeft = container.querySelector(".ss-preset-tray")?.scrollLeft || 0;
         const esc = AppUI.esc;
         const wsList = getAvailableWorkspaces();
-        const ws = getActiveComposeWs();
+        const liveWs = getActiveComposeWs();
+        const ws = getEditWs(liveWs);
+        const staging = isStageMode();
         const profile = getProfile() || {};
         const maxUsks = getUpstreamKeyersPerME(profile);
-        const dsks = getAvailableDSKs();
+        const draftObj = staging ? ensureDraftForWs(liveWs) : null;
+        const dsks = (staging && liveWs.type === "me" && draftObj?.dsks)
+            ? draftObj.dsks.slice(0, getAvailableDSKs().length)
+            : getAvailableDSKs();
         const presets = ShowTemplates.getAllSSPresets();
+        const animCfg = typeof SwitcherEngine?.getSSAnimSettings === "function"
+            ? SwitcherEngine.getSSAnimSettings()
+            : { enabled: true, durationMs: 600, easing: "easeInOut", offBoxMode: "shrink" };
 
         const layerPillsHtml = ws.type === "superSource"
             ? `
@@ -776,6 +856,7 @@ const ViewCompose = (() => {
         const activeClips = typeof CanvasRenderer !== "undefined" && typeof CanvasRenderer.getActiveMediaPlayerClips === "function"
             ? CanvasRenderer.getActiveMediaPlayerClips()
             : [];
+        const freeDves = ((staging ? draftObj?.dves : state.resources?.dves) || []).filter(d => d.assignedTo === null).length;
 
         container.innerHTML = `
             <div class="compose-view">
@@ -783,8 +864,12 @@ const ViewCompose = (() => {
                     <div class="field-row" style="gap:10px; flex-wrap:wrap;">
                         <div class="seg">
                             ${wsList.map(w => `
-                                <button class="seg-item ${w.id === ws.id ? "active" : ""}" data-cws="${w.id}">${esc(w.name)}</button>
+                                <button class="seg-item ${w.id === liveWs.id ? "active" : ""}" data-cws="${w.id}">${esc(w.name)}</button>
                             `).join("")}
+                        </div>
+                        <div class="seg" title="Live edits the ATEM immediately; Offline Stage lets you compose safely without affecting live ATEM until you push">
+                            <button class="seg-item ${!staging ? "active" : ""}" id="btnCmpModeLive" data-cmp-mode="live">Live</button>
+                            <button class="seg-item ${staging ? "active" : ""}" id="btnCmpModeStage" data-cmp-mode="stage">Offline Stage</button>
                         </div>
                         ${ws.type === "me" ? `
                             <div class="seg" title="Switch stage background between Program (PGM) and Preview (PVW)">
@@ -812,6 +897,20 @@ const ViewCompose = (() => {
                     </div>
                 </div>
 
+                ${staging ? `
+                    <div class="field-row" id="cmpStageActionBar" style="padding:7px 14px; background:var(--amber-bg); border-bottom:1px solid var(--amber-border); justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                        <div class="field-row" style="gap:8px;">
+                            <span class="badge amber">OFFLINE STAGE</span>
+                            <span style="font-size:12px;">Editing ${esc(liveWs.name)} locally — live output &amp; ATEM hardware untouched until pushed.</span>
+                        </div>
+                        <div class="field-row" style="gap:6px;">
+                            <button class="btn btn-xs" id="btnCmpSyncLive" title="Discard local draft and reload current Live ATEM state">↺ Sync from Live</button>
+                            <button class="btn btn-xs btn-pgm solid" id="btnCmpCommitCut" title="Push staged changes directly to Live &amp; ATEM">⚡ Cut to Live</button>
+                            ${liveWs.type === "superSource" ? `<button class="btn btn-xs btn-amber solid" id="btnCmpCommitAnim" title="Animate smoothly from Live SuperSource into this staged look">✨ Animate to Live</button>` : ""}
+                        </div>
+                    </div>
+                ` : ""}
+
                 <div class="compose-body">
                     <div class="compose-stage-col">
                         <div class="compose-canvas-stage">
@@ -826,16 +925,39 @@ const ViewCompose = (() => {
                         </div>
 
                         ${ws.type === "superSource" ? `
-                            <div class="ss-preset-tray">
-                                <span class="section-label" style="margin-right:4px;">Layouts</span>
-                                ${presets.map(p => `
-                                    <div class="ss-preset-card" data-ss-preset="${esc(p.id)}" title="Apply ${esc(p.name)}">
-                                        ${ShowTemplates.renderPresetThumbSvg(p.boxes)}
-                                        <span>${esc(p.name)}</span>
-                                        ${!p.builtIn ? `<button class="ss-preset-del" data-del-preset="${esc(p.id)}" title="Delete custom preset">×</button>` : ""}
-                                    </div>
-                                `).join("")}
-                                <button class="btn btn-sm btn-accent-soft" id="btnSaveSSPreset" style="flex-shrink:0; height:58px;">+ Save Layout</button>
+                            <div style="display:flex; flex-direction:column; gap:6px;">
+                                <div class="field-row" style="gap:6px; flex-wrap:wrap; padding:6px 10px; border-radius:8px; background:var(--bg-surface); border:1px solid var(--border); font-size:11px;">
+                                    <span class="section-label" style="margin:0;">Merge Animate</span>
+                                    <button class="btn btn-xs ${animCfg.enabled ? "btn-accent-soft" : ""}" id="btnCmpSSAnimToggle">${animCfg.enabled ? "✨ On Click: Animate" : "⚡ On Click: Cut"}</button>
+                                    <select id="selCmpSSAnimDur" style="width:auto; padding:2px 6px; font-size:11px;" title="Duration">
+                                        ${[250, 500, 600, 750, 1000, 1500, 2000].map(ms => `<option value="${ms}" ${animCfg.durationMs === ms ? "selected" : ""}>${ms >= 1000 ? `${ms / 1000}s` : `${ms}ms`}</option>`).join("")}
+                                    </select>
+                                    <select id="selCmpSSAnimEase" style="width:auto; padding:2px 6px; font-size:11px;" title="Easing">
+                                        <option value="easeInOut" ${animCfg.easing === "easeInOut" ? "selected" : ""}>Smooth In-Out</option>
+                                        <option value="easeOut" ${animCfg.easing === "easeOut" ? "selected" : ""}>Ease Out</option>
+                                        <option value="easeIn" ${animCfg.easing === "easeIn" ? "selected" : ""}>Ease In</option>
+                                        <option value="linear" ${animCfg.easing === "linear" ? "selected" : ""}>Linear</option>
+                                        <option value="overshoot" ${animCfg.easing === "overshoot" ? "selected" : ""}>Overshoot</option>
+                                    </select>
+                                    <select id="selCmpSSAnimOff" style="width:auto; padding:2px 6px; font-size:11px;" title="How Off-Air / Entering / Exiting boxes animate">
+                                        <option value="shrink" ${animCfg.offBoxMode === "shrink" ? "selected" : ""}>Off Boxes: Zoom (ATEM)</option>
+                                        <option value="slide" ${animCfg.offBoxMode === "slide" ? "selected" : ""}>Off Boxes: Slide (ATEM)</option>
+                                        <option value="crop" ${animCfg.offBoxMode === "crop" ? "selected" : ""}>Off Boxes: Crop Wipe (ATEM)</option>
+                                        <option value="fade" ${animCfg.offBoxMode === "fade" ? "selected" : ""}>Off Boxes: Fade (Canvas)</option>
+                                        <option value="cut" ${animCfg.offBoxMode === "cut" ? "selected" : ""}>Off Boxes: Cut</option>
+                                    </select>
+                                </div>
+                                <div class="ss-preset-tray">
+                                    <span class="section-label" style="margin-right:4px;">Layouts</span>
+                                    ${presets.map(p => `
+                                        <div class="ss-preset-card" data-ss-preset="${esc(p.id)}" title="Apply ${esc(p.name)}">
+                                            ${ShowTemplates.renderPresetThumbSvg(p.boxes)}
+                                            <span>${esc(p.name)}</span>
+                                            ${!p.builtIn ? `<button class="ss-preset-del" data-del-preset="${esc(p.id)}" title="Delete custom preset">×</button>` : ""}
+                                        </div>
+                                    `).join("")}
+                                    <button class="btn btn-sm btn-accent-soft" id="btnSaveSSPreset" style="flex-shrink:0; height:58px;">+ Save Layout</button>
+                                </div>
                             </div>
                         ` : ""}
                     </div>
@@ -844,14 +966,14 @@ const ViewCompose = (() => {
                         <div class="inspector-top">
                             <div class="field-row" style="justify-content:space-between;">
                                 <span class="section-label">${esc(ws.name)} Layers</span>
-                                ${ws.type === "me" ? `<span class="badge">${state.resources.dves.filter(d => d.assignedTo === null).length} DVE free</span>` : ""}
+                                ${ws.type === "me" ? `<span class="badge">${freeDves} DVE free</span>` : ""}
                             </div>
                             <div class="layer-pill-grid">${layerPillsHtml}</div>
                             ${showTabs ? `
                                 <div class="seg" style="width:100%;">
-                                    <button class="seg-item ${inspectorTab === "source" ? "active" : ""}" data-itab="source" style="flex:1;">Source & Key</button>
+                                    <button class="seg-item ${inspectorTab === "source" ? "active" : ""}" data-itab="source" style="flex:1;">Source &amp; Key</button>
                                     ${selectedTarget.kind !== "dsk" ? `<button class="seg-item ${inspectorTab === "transform" ? "active" : ""}" data-itab="transform" style="flex:1;">Transform</button>` : ""}
-                                    <button class="seg-item ${inspectorTab === "style" ? "active" : ""}" data-itab="style" style="flex:1;">Crop & Style</button>
+                                    <button class="seg-item ${inspectorTab === "style" ? "active" : ""}" data-itab="style" style="flex:1;">Crop &amp; Style</button>
                                 </div>
                             ` : ""}
                         </div>
@@ -863,7 +985,7 @@ const ViewCompose = (() => {
             </div>
         `;
 
-        // Wire subbar
+        // Wire subbar & edit mode
         container.querySelectorAll("[data-cws]").forEach(btn => {
             btn.addEventListener("click", () => {
                 selectedWsId = Number(btn.dataset.cws);
@@ -873,6 +995,28 @@ const ViewCompose = (() => {
                 render(container);
             });
         });
+        container.querySelectorAll("[data-cmp-mode]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const nextMode = btn.dataset.cmpMode;
+                if (nextMode === "stage") ensureDraftForWs(liveWs);
+                setComposeEditMode(nextMode);
+                render(container);
+            });
+        });
+        container.querySelector("#btnCmpSyncLive")?.addEventListener("click", () => {
+            delete stagedDrafts[liveWs.id];
+            ensureDraftForWs(liveWs);
+            AppUI.toast(`Synced ${liveWs.name} draft from Live`, "ok");
+            render(container);
+        });
+        container.querySelector("#btnCmpCommitCut")?.addEventListener("click", () => {
+            commitDraftToLive(liveWs, { animate: false });
+            render(container);
+        });
+        container.querySelector("#btnCmpCommitAnim")?.addEventListener("click", () => {
+            commitDraftToLive(liveWs, { animate: true });
+        });
+
         container.querySelectorAll("[data-stage-bus]").forEach(btn => {
             btn.addEventListener("click", () => { stageBusMode = btn.dataset.stageBus; render(container); });
         });
@@ -881,7 +1025,7 @@ const ViewCompose = (() => {
         container.querySelector("#btnCmpSafe")?.addEventListener("click", () => { showSafeArea = !showSafeArea; render(container); });
         container.querySelector("#btnCmpSnap")?.addEventListener("click", () => { snapEnabled = !snapEnabled; render(container); });
         container.querySelector("#btnCmpPopout")?.addEventListener("click", () => {
-            state.activeWorkspaceId = ws.id;
+            state.activeWorkspaceId = liveWs.id;
             if (typeof PopoutManager !== "undefined") PopoutManager.openActiveBus();
         });
         container.querySelectorAll("[data-cmp-clip-toggle]").forEach(btn => {
@@ -897,6 +1041,22 @@ const ViewCompose = (() => {
             });
         });
 
+        // SuperSource Animation Controls
+        container.querySelector("#btnCmpSSAnimToggle")?.addEventListener("click", () => {
+            const cur = SwitcherEngine.getSSAnimSettings?.() || { enabled: true };
+            SwitcherEngine.setSSAnimSettings?.({ enabled: !cur.enabled });
+            render(container);
+        });
+        container.querySelector("#selCmpSSAnimDur")?.addEventListener("change", (e) => {
+            SwitcherEngine.setSSAnimSettings?.({ durationMs: Number(e.target.value) || 600 });
+        });
+        container.querySelector("#selCmpSSAnimEase")?.addEventListener("change", (e) => {
+            SwitcherEngine.setSSAnimSettings?.({ easing: e.target.value });
+        });
+        container.querySelector("#selCmpSSAnimOff")?.addEventListener("change", (e) => {
+            SwitcherEngine.setSSAnimSettings?.({ offBoxMode: e.target.value });
+        });
+
         // Wire SS visual presets & save custom layout
         container.querySelectorAll("[data-del-preset]").forEach(btn => {
             btn.addEventListener("click", (e) => {
@@ -908,9 +1068,27 @@ const ViewCompose = (() => {
         container.querySelectorAll("[data-ss-preset]").forEach(card => {
             card.addEventListener("click", () => {
                 const preset = ShowTemplates.getAllSSPresets().find(p => p.id === card.dataset.ssPreset);
-                if (preset) {
-                    ShowTemplates.applySSPreset(ws, preset);
-                    AppUI.toast(`Applied "${preset.name}"`, "ok");
+                if (!preset) return;
+                if (staging) {
+                    preset.boxes.forEach((cfg, idx) => {
+                        const b = ws.data.boxes?.[idx];
+                        if (!b) return;
+                        b.enabled = !!cfg.enabled;
+                        b.x = Number(cfg.x ?? 0);
+                        b.y = Number(cfg.y ?? 0);
+                        b.size = Number(cfg.size ?? 0.5);
+                        b.cropEnabled = !!cfg.cropEnabled;
+                        b.cropTop = Number(cfg.cropTop ?? 0);
+                        b.cropBottom = Number(cfg.cropBottom ?? 0);
+                        b.cropLeft = Number(cfg.cropLeft ?? 0);
+                        b.cropRight = Number(cfg.cropRight ?? 0);
+                    });
+                    AppUI.toast(`Staged "${preset.name}" offline`, "ok");
+                    render(container);
+                } else {
+                    const useAnim = !!SwitcherEngine.getSSAnimSettings?.()?.enabled;
+                    ShowTemplates.applySSPreset(liveWs, preset, { animate: useAnim });
+                    AppUI.toast(`${useAnim ? "Animating" : "Applied"} "${preset.name}"`, "ok");
                 }
             });
         });
@@ -937,9 +1115,9 @@ const ViewCompose = (() => {
             });
         });
 
-        // Wire Inspector Controls
-        wireInspectorControls(container, ws);
-        wireCanvasDrag(container, ws);
+        // Wire Inspector Controls & Canvas Drag
+        wireInspectorControls(container, liveWs);
+        wireCanvasDrag(container, liveWs);
         renderCanvas();
         const insp = container.querySelector(".inspector-body");
         if (insp && savedInspTop > 0) insp.scrollTop = savedInspTop;
@@ -947,50 +1125,161 @@ const ViewCompose = (() => {
         if (tray && savedTrayLeft > 0) tray.scrollLeft = savedTrayLeft;
     }
 
-    function wireInspectorControls(container, ws) {
+    function commitDraftToLive(liveWs, { animate = false } = {}) {
+        const draft = stagedDrafts[liveWs?.id];
+        if (!liveWs || !draft) return;
+
+        if (liveWs.type === "superSource") {
+            SwitcherEngine.commitSuperSourceState(liveWs, draft.data, { animate });
+            AppUI.toast(`${animate ? "Animating" : "Cut"} staged ${liveWs.name} to Live`, "ok");
+            return;
+        }
+
+        // Commit M/E USKs and DSKs cleanly through SwitcherEngine
+        if (Array.isArray(draft.data?.usk)) {
+            draft.data.usk.forEach((u, idx) => {
+                if (!liveWs.data.usk?.[idx]) return;
+                SwitcherEngine.setLayerSource(liveWs, idx, u.source || "", "usk");
+                SwitcherEngine.setLayerEnabled(liveWs, idx, !!u.enabled, "usk", true);
+                SwitcherEngine.setLayerPosition(liveWs, idx, u.x ?? 0, u.y ?? 0, "usk");
+                SwitcherEngine.setLayerSize(liveWs, idx, u.size ?? 0.5, "usk");
+                const draftDve = u.dveId !== null ? draft.dves?.find(d => d.id === u.dveId) : null;
+                if (draftDve) {
+                    SwitcherEngine.setLayerCropEnabled(liveWs, idx, !!draftDve.cropEnabled, "usk");
+                    ["left", "right", "top", "bottom"].forEach(edge => {
+                        const key = `crop${edge[0].toUpperCase()}${edge.slice(1)}`;
+                        SwitcherEngine.setLayerCropEdge(liveWs, idx, edge, draftDve[key] || 0, "usk");
+                    });
+                }
+            });
+        }
+        if (liveWs.resourceId === 0 && Array.isArray(draft.dsks)) {
+            draft.dsks.forEach((d, idx) => {
+                SwitcherEngine.setDSKFill(idx, d.source || "");
+                SwitcherEngine.setDSKKey(idx, d.keySource || "");
+                SwitcherEngine.setDSKEnabled(idx, !!d.enabled);
+                SwitcherEngine.setDSKTie(idx, !!d.tie);
+                SwitcherEngine.setDSKRate(idx, d.rate || 25);
+            });
+        }
+        AppUI.toast(`Cut staged ${liveWs.name} to Live`, "ok");
+    }
+
+    function wireInspectorControls(container, liveWs) {
+        const ws = getEditWs(liveWs);
+        const staging = isStageMode();
         const isSS = ws.type === "superSource";
         const group = isSS ? "box" : "usk";
         const idx = selectedTarget.index;
+        const redrawStage = () => { syncLiveStageOverlays(); renderCanvas(); };
 
         // Art controls
         if (isSS && selectedTarget.kind === "art") {
-            container.querySelector("#cmpArtSrc")?.addEventListener("change", (e) => SwitcherEngine.setSuperSourceArt(ws, { artSource: e.target.value }));
-            container.querySelector("#cmpArtPlace")?.addEventListener("change", (e) => SwitcherEngine.setSuperSourceArt(ws, { artPlace: e.target.value }));
-            container.querySelector("#cmpArtKey")?.addEventListener("change", (e) => SwitcherEngine.setSuperSourceArt(ws, { artKeySource: e.target.value }));
-            container.querySelector("#cmpArtPre")?.addEventListener("change", (e) => SwitcherEngine.setSuperSourceArt(ws, { artPremultiplied: e.target.checked }));
-            container.querySelector("#cmpArtInv")?.addEventListener("change", (e) => SwitcherEngine.setSuperSourceArt(ws, { artInvert: e.target.checked }));
-            container.querySelector("#cmpArtClip")?.addEventListener("input", (e) => SwitcherEngine.setSuperSourceArt(ws, { artClip: Number(e.target.value) }));
-            container.querySelector("#cmpArtGain")?.addEventListener("input", (e) => SwitcherEngine.setSuperSourceArt(ws, { artGain: Number(e.target.value) }));
+            const setArt = (patch, full = true) => {
+                if (staging) {
+                    Object.assign(ws.data, patch);
+                    if (full) render(container); else redrawStage();
+                } else {
+                    SwitcherEngine.setSuperSourceArt(liveWs, patch);
+                }
+            };
+            container.querySelector("#cmpArtSrc")?.addEventListener("change", (e) => setArt({ artSource: e.target.value }));
+            container.querySelector("#cmpArtPlace")?.addEventListener("change", (e) => setArt({ artPlace: e.target.value }));
+            container.querySelector("#cmpArtKey")?.addEventListener("change", (e) => setArt({ artKeySource: e.target.value }));
+            container.querySelector("#cmpArtPre")?.addEventListener("change", (e) => setArt({ artPremultiplied: e.target.checked }));
+            container.querySelector("#cmpArtInv")?.addEventListener("change", (e) => setArt({ artInvert: e.target.checked }));
+            container.querySelector("#cmpArtClip")?.addEventListener("input", (e) => setArt({ artClip: Number(e.target.value) }, false));
+            container.querySelector("#cmpArtGain")?.addEventListener("input", (e) => setArt({ artGain: Number(e.target.value) }, false));
             return;
         }
 
         // ME BG
         if (!isSS && selectedTarget.kind === "bg") {
-            container.querySelector("#cmpMePgm")?.addEventListener("change", (e) => SwitcherEngine.setMEProgram(ws, e.target.value));
-            container.querySelector("#cmpMePvw")?.addEventListener("change", (e) => SwitcherEngine.setMEPreview(ws, e.target.value));
-            container.querySelector("#cmpMeCut")?.addEventListener("click", () => SwitcherEngine.performTransitionCut(ws, { record: true, emit: true }));
-            container.querySelector("#cmpMeAuto")?.addEventListener("click", () => SwitcherEngine.performTransitionAuto(ws));
+            container.querySelector("#cmpMePgm")?.addEventListener("change", (e) => {
+                if (staging) { ws.data.source = e.target.value; render(container); }
+                else SwitcherEngine.setMEProgram(liveWs, e.target.value);
+            });
+            container.querySelector("#cmpMePvw")?.addEventListener("change", (e) => {
+                if (staging) { ws.data.previewSource = e.target.value; render(container); }
+                else SwitcherEngine.setMEPreview(liveWs, e.target.value);
+            });
+            container.querySelector("#cmpMeCut")?.addEventListener("click", () => {
+                if (staging) {
+                    const tmp = ws.data.source; ws.data.source = ws.data.previewSource; ws.data.previewSource = tmp;
+                    render(container);
+                } else {
+                    SwitcherEngine.performTransitionCut(liveWs, { record: true, emit: true });
+                }
+            });
+            container.querySelector("#cmpMeAuto")?.addEventListener("click", () => {
+                if (!staging) SwitcherEngine.performTransitionAuto(liveWs);
+            });
             return;
         }
 
         // DSK
         if (selectedTarget.kind === "dsk") {
-            const dsk = getDSK(idx);
+            const dsk = getEditDSK(liveWs, idx);
             if (!dsk) return;
-            container.querySelector("#cmpDskAir")?.addEventListener("click", () => SwitcherEngine.setDSKEnabled(idx, !dsk.enabled));
-            container.querySelector("#cmpDskAuto")?.addEventListener("click", () => SwitcherEngine.performDSKAuto(idx));
-            container.querySelector("#cmpDskTie")?.addEventListener("click", () => SwitcherEngine.setDSKTie(idx, !dsk.tie));
-            container.querySelector("#cmpDskFill")?.addEventListener("change", (e) => SwitcherEngine.setDSKFill(idx, e.target.value));
-            container.querySelector("#cmpDskKey")?.addEventListener("change", (e) => SwitcherEngine.setDSKKey(idx, e.target.value));
-            container.querySelector("#cmpDskRate")?.addEventListener("change", (e) => SwitcherEngine.setDSKRate(idx, Number(e.target.value) || 25));
-            container.querySelector("#cmpDskPre")?.addEventListener("change", (e) => SwitcherEngine.setDSKPremultiplied(idx, e.target.checked));
-            container.querySelector("#cmpDskInv")?.addEventListener("change", (e) => SwitcherEngine.setDSKInvert(idx, e.target.checked));
-            container.querySelector("#cmpDskClip")?.addEventListener("input", (e) => SwitcherEngine.setDSKClip(idx, Number(e.target.value)));
-            container.querySelector("#cmpDskGain")?.addEventListener("input", (e) => SwitcherEngine.setDSKGain(idx, Number(e.target.value)));
-            container.querySelector("#cmpDskMaskEn")?.addEventListener("change", (e) => SwitcherEngine.setDSKMaskEnabled(idx, e.target.checked));
+            const applyEdge = (edge, val) => {
+                const map = { left: ["maskLeft", "maskRight"], right: ["maskRight", "maskLeft"], top: ["maskTop", "maskBottom"], bottom: ["maskBottom", "maskTop"] };
+                const p = map[edge];
+                if (!p) return;
+                dsk[p[0]] = val;
+                if (dsk.maskLinked) dsk[p[1]] = val;
+            };
+            container.querySelector("#cmpDskAir")?.addEventListener("click", () => {
+                if (staging) { dsk.enabled = !dsk.enabled; render(container); }
+                else SwitcherEngine.setDSKEnabled(idx, !dsk.enabled);
+            });
+            container.querySelector("#cmpDskAuto")?.addEventListener("click", () => {
+                if (staging) { dsk.enabled = !dsk.enabled; render(container); }
+                else SwitcherEngine.performDSKAuto(idx);
+            });
+            container.querySelector("#cmpDskTie")?.addEventListener("click", () => {
+                if (staging) { dsk.tie = !dsk.tie; render(container); }
+                else SwitcherEngine.setDSKTie(idx, !dsk.tie);
+            });
+            container.querySelector("#cmpDskFill")?.addEventListener("change", (e) => {
+                if (staging) { dsk.source = e.target.value; render(container); }
+                else SwitcherEngine.setDSKFill(idx, e.target.value);
+            });
+            container.querySelector("#cmpDskKey")?.addEventListener("change", (e) => {
+                if (staging) { dsk.keySource = e.target.value; render(container); }
+                else SwitcherEngine.setDSKKey(idx, e.target.value);
+            });
+            container.querySelector("#cmpDskRate")?.addEventListener("change", (e) => {
+                const r = Math.max(1, Math.min(250, Number(e.target.value) || 25));
+                if (staging) { dsk.rate = r; render(container); }
+                else SwitcherEngine.setDSKRate(idx, r);
+            });
+            container.querySelector("#cmpDskPre")?.addEventListener("change", (e) => {
+                if (staging) { dsk.keySettings.linear.premultiplied = e.target.checked; render(container); }
+                else SwitcherEngine.setDSKPremultiplied(idx, e.target.checked);
+            });
+            container.querySelector("#cmpDskInv")?.addEventListener("change", (e) => {
+                if (staging) { dsk.keySettings.linear.invert = e.target.checked; dsk.keySettings.luma.invert = e.target.checked; render(container); }
+                else SwitcherEngine.setDSKInvert(idx, e.target.checked);
+            });
+            container.querySelector("#cmpDskClip")?.addEventListener("input", (e) => {
+                if (staging) { const v = Number(e.target.value); dsk.keySettings.linear.clip = v; dsk.keySettings.luma.clip = v; redrawStage(); }
+                else SwitcherEngine.setDSKClip(idx, Number(e.target.value));
+            });
+            container.querySelector("#cmpDskGain")?.addEventListener("input", (e) => {
+                if (staging) { const v = Number(e.target.value); dsk.keySettings.linear.gain = v; dsk.keySettings.luma.gain = v; redrawStage(); }
+                else SwitcherEngine.setDSKGain(idx, Number(e.target.value));
+            });
+            container.querySelector("#cmpDskMaskEn")?.addEventListener("change", (e) => {
+                if (staging) { dsk.maskEnabled = e.target.checked; render(container); }
+                else SwitcherEngine.setDSKMaskEnabled(idx, e.target.checked);
+            });
             container.querySelector("#cmpDskMaskLink")?.addEventListener("change", (e) => { dsk.maskLinked = e.target.checked; });
             container.querySelectorAll("[data-dsk-mask]").forEach(rng => {
-                rng.addEventListener("input", (e) => SwitcherEngine.setDSKMaskEdge(idx, rng.dataset.dskMask.replace("mask", "").toLowerCase(), Number(e.target.value)));
+                rng.addEventListener("input", (e) => {
+                    const edge = rng.dataset.dskMask.replace("mask", "").toLowerCase();
+                    if (staging) { applyEdge(edge, Number(e.target.value)); redrawStage(); }
+                    else SwitcherEngine.setDSKMaskEdge(idx, edge, Number(e.target.value));
+                });
             });
             return;
         }
@@ -998,73 +1287,193 @@ const ViewCompose = (() => {
         // Box / USK
         const layer = getCurrentLayerObj(ws);
         if (!layer) return;
-        container.querySelector("#cmpLayerEnabled")?.addEventListener("change", (e) => SwitcherEngine.setLayerEnabled(ws, idx, e.target.checked, group));
-        container.querySelector("#cmpUskOnAirBtn")?.addEventListener("click", () => SwitcherEngine.setLayerEnabled(ws, idx, !layer.enabled, "usk", true));
-        container.querySelector("#cmpUskStageBtn")?.addEventListener("click", () => SwitcherEngine.toggleNextTransitionKey(ws, idx));
-        container.querySelector("#cmpLayerSource")?.addEventListener("change", (e) => SwitcherEngine.setLayerSource(ws, idx, e.target.value, group));
+        const cropHost = getEditCropHost(liveWs, layer, isSS);
+
+        container.querySelector("#cmpLayerEnabled")?.addEventListener("change", (e) => {
+            if (staging) { layer.enabled = e.target.checked; render(container); }
+            else SwitcherEngine.setLayerEnabled(liveWs, idx, e.target.checked, group);
+        });
+        container.querySelector("#cmpUskOnAirBtn")?.addEventListener("click", () => {
+            if (staging) { layer.enabled = !layer.enabled; render(container); }
+            else SwitcherEngine.setLayerEnabled(liveWs, idx, !layer.enabled, "usk", true);
+        });
+        container.querySelector("#cmpUskStageBtn")?.addEventListener("click", () => {
+            if (staging) {
+                ws.data.nextTransition ??= { bkgd: true, usk: [false, false, false, false] };
+                ws.data.nextTransition.usk[idx] = !ws.data.nextTransition.usk[idx];
+                render(container);
+            } else {
+                SwitcherEngine.toggleNextTransitionKey(liveWs, idx);
+            }
+        });
+        container.querySelector("#cmpLayerSource")?.addEventListener("change", (e) => {
+            if (staging) { layer.source = e.target.value; render(container); }
+            else SwitcherEngine.setLayerSource(liveWs, idx, e.target.value, group);
+        });
         container.querySelector("#cmpKeyType")?.addEventListener("change", (e) => {
-            if (!setLayerKeyType(layer, e.target.value)) AppUI.toast("No free DVE channels available on this ATEM model.", "err");
-            SwitcherEngine.notify("keyType", true);
+            if (staging) { layer.keyType = e.target.value; render(container); }
+            else if (!SwitcherEngine.changeLayerKeyType(liveWs, idx, e.target.value)) {
+                AppUI.toast("No free DVE channels available on this ATEM model.", "err");
+            }
         });
         container.querySelector("#cmpFlyingKey")?.addEventListener("change", (e) => {
-            if (!setFlyingKey(layer, e.target.checked)) AppUI.toast("No free DVE channels available.", "err");
-            SwitcherEngine.notify("flyingKey", true);
+            if (staging) { layer.flyingKey = e.target.checked; render(container); }
+            else if (!SwitcherEngine.changeLayerFlyingKey(liveWs, idx, e.target.checked)) {
+                AppUI.toast("No free DVE channels available.", "err");
+            }
         });
         container.querySelector("#cmpQuickEnableDve")?.addEventListener("click", () => {
-            if (!setLayerKeyType(layer, "dve")) AppUI.toast("No free DVE channels available on this ATEM model.", "err");
-            SwitcherEngine.notify("keyType", true);
+            if (staging) { layer.keyType = "dve"; render(container); }
+            else if (!SwitcherEngine.changeLayerKeyType(liveWs, idx, "dve")) {
+                AppUI.toast("No free DVE channels available on this ATEM model.", "err");
+            }
         });
         container.querySelector("#cmpQuickEnableFly")?.addEventListener("click", () => {
-            if (!setFlyingKey(layer, true)) AppUI.toast("No free DVE channels available.", "err");
-            SwitcherEngine.notify("flyingKey", true);
+            if (staging) { layer.flyingKey = true; render(container); }
+            else if (!SwitcherEngine.changeLayerFlyingKey(liveWs, idx, true)) {
+                AppUI.toast("No free DVE channels available.", "err");
+            }
         });
-        container.querySelector("#cmpLumaClip")?.addEventListener("input", (e) => SwitcherEngine.setLumaSetting(ws, idx, "clip", Number(e.target.value)));
-        container.querySelector("#cmpLumaGain")?.addEventListener("input", (e) => SwitcherEngine.setLumaSetting(ws, idx, "gain", Number(e.target.value)));
-        container.querySelector("#cmpLumaInv")?.addEventListener("change", (e) => SwitcherEngine.setLumaSetting(ws, idx, "invert", e.target.checked));
-        container.querySelector("#cmpKeySrc")?.addEventListener("change", (e) => SwitcherEngine.setLinearSetting(ws, idx, "keySource", e.target.value));
-        container.querySelector("#cmpLinPre")?.addEventListener("change", (e) => SwitcherEngine.setLinearSetting(ws, idx, "premultiplied", e.target.checked));
-        container.querySelector("#cmpLinClip")?.addEventListener("input", (e) => SwitcherEngine.setLinearSetting(ws, idx, "clip", Number(e.target.value)));
-        container.querySelector("#cmpLinGain")?.addEventListener("input", (e) => SwitcherEngine.setLinearSetting(ws, idx, "gain", Number(e.target.value)));
-        container.querySelector("#cmpChromaCol")?.addEventListener("input", (e) => SwitcherEngine.setChromaSetting(ws, idx, "sampleColor", e.target.value));
-        container.querySelector("#cmpChromaSpill")?.addEventListener("input", (e) => SwitcherEngine.setChromaSetting(ws, idx, "spill", Number(e.target.value)));
-        container.querySelector("#cmpChromaCorr")?.addEventListener("input", (e) => SwitcherEngine.setChromaSetting(ws, idx, "correction", Number(e.target.value)));
-        container.querySelector("#cmpPatType")?.addEventListener("change", (e) => SwitcherEngine.setPatternSetting(ws, idx, "pattern", e.target.value));
-        container.querySelector("#cmpPatSize")?.addEventListener("input", (e) => SwitcherEngine.setPatternSetting(ws, idx, "size", Number(e.target.value)));
-        container.querySelector("#cmpPatSoft")?.addEventListener("input", (e) => SwitcherEngine.setPatternSetting(ws, idx, "softness", Number(e.target.value)));
+        container.querySelector("#cmpLumaClip")?.addEventListener("input", (e) => {
+            if (staging) { layer.keySettings.luma.clip = Number(e.target.value); redrawStage(); }
+            else SwitcherEngine.setLumaSetting(liveWs, idx, "clip", Number(e.target.value));
+        });
+        container.querySelector("#cmpLumaGain")?.addEventListener("input", (e) => {
+            if (staging) { layer.keySettings.luma.gain = Number(e.target.value); redrawStage(); }
+            else SwitcherEngine.setLumaSetting(liveWs, idx, "gain", Number(e.target.value));
+        });
+        container.querySelector("#cmpLumaInv")?.addEventListener("change", (e) => {
+            if (staging) { layer.keySettings.luma.invert = e.target.checked; render(container); }
+            else SwitcherEngine.setLumaSetting(liveWs, idx, "invert", e.target.checked);
+        });
+        container.querySelector("#cmpKeySrc")?.addEventListener("change", (e) => {
+            if (staging) { layer.keySettings.linear.keySource = e.target.value; render(container); }
+            else SwitcherEngine.setLinearSetting(liveWs, idx, "keySource", e.target.value);
+        });
+        container.querySelector("#cmpLinPre")?.addEventListener("change", (e) => {
+            if (staging) { layer.keySettings.linear.premultiplied = e.target.checked; render(container); }
+            else SwitcherEngine.setLinearSetting(liveWs, idx, "premultiplied", e.target.checked);
+        });
+        container.querySelector("#cmpLinClip")?.addEventListener("input", (e) => {
+            if (staging) { layer.keySettings.linear.clip = Number(e.target.value); redrawStage(); }
+            else SwitcherEngine.setLinearSetting(liveWs, idx, "clip", Number(e.target.value));
+        });
+        container.querySelector("#cmpLinGain")?.addEventListener("input", (e) => {
+            if (staging) { layer.keySettings.linear.gain = Number(e.target.value); redrawStage(); }
+            else SwitcherEngine.setLinearSetting(liveWs, idx, "gain", Number(e.target.value));
+        });
+        container.querySelector("#cmpChromaCol")?.addEventListener("input", (e) => {
+            if (staging) { layer.keySettings.chroma.sampleColor = e.target.value; redrawStage(); }
+            else SwitcherEngine.setChromaSetting(liveWs, idx, "sampleColor", e.target.value);
+        });
+        container.querySelector("#cmpChromaSpill")?.addEventListener("input", (e) => {
+            if (staging) { layer.keySettings.chroma.spill = Number(e.target.value); redrawStage(); }
+            else SwitcherEngine.setChromaSetting(liveWs, idx, "spill", Number(e.target.value));
+        });
+        container.querySelector("#cmpChromaCorr")?.addEventListener("input", (e) => {
+            if (staging) { layer.keySettings.chroma.correction = Number(e.target.value); redrawStage(); }
+            else SwitcherEngine.setChromaSetting(liveWs, idx, "correction", Number(e.target.value));
+        });
+        container.querySelector("#cmpPatType")?.addEventListener("change", (e) => {
+            if (staging) { layer.keySettings.pattern.pattern = e.target.value; render(container); }
+            else SwitcherEngine.setPatternSetting(liveWs, idx, "pattern", e.target.value);
+        });
+        container.querySelector("#cmpPatSize")?.addEventListener("input", (e) => {
+            if (staging) { layer.keySettings.pattern.size = Number(e.target.value); redrawStage(); }
+            else SwitcherEngine.setPatternSetting(liveWs, idx, "size", Number(e.target.value));
+        });
+        container.querySelector("#cmpPatSoft")?.addEventListener("input", (e) => {
+            if (staging) { layer.keySettings.pattern.softness = Number(e.target.value); redrawStage(); }
+            else SwitcherEngine.setPatternSetting(liveWs, idx, "softness", Number(e.target.value));
+        });
 
         // Transform & Fly Keyframes
-        container.querySelector("#cmpPosX")?.addEventListener("input", (e) => SwitcherEngine.setLayerPosition(ws, idx, Number(e.target.value), layer.y, group));
-        container.querySelector("#cmpPosY")?.addEventListener("input", (e) => SwitcherEngine.setLayerPosition(ws, idx, layer.x, Number(e.target.value), group));
-        container.querySelector("#cmpScale")?.addEventListener("input", (e) => SwitcherEngine.setLayerSize(ws, idx, Number(e.target.value), group));
-        container.querySelector("#cmpResetTransform")?.addEventListener("click", () => {
-            SwitcherEngine.setLayerPosition(ws, idx, 0, 0, group);
-            SwitcherEngine.setLayerSize(ws, idx, 1, group);
+        container.querySelector("#cmpPosX")?.addEventListener("input", (e) => {
+            if (staging) { layer.x = Number(e.target.value); redrawStage(); }
+            else SwitcherEngine.setLayerPosition(liveWs, idx, Number(e.target.value), layer.y, group);
         });
-        container.querySelector("#cmpFlyRate")?.addEventListener("change", (e) => SwitcherEngine.setUSKFlyRate(ws, idx, Number(e.target.value) || 25));
-        container.querySelector("#cmpSetA")?.addEventListener("click", () => { SwitcherEngine.setUSKKeyframe(ws, idx, "A"); AppUI.toast("Stored Keyframe A", "ok"); });
-        container.querySelector("#cmpSetB")?.addEventListener("click", () => { SwitcherEngine.setUSKKeyframe(ws, idx, "B"); AppUI.toast("Stored Keyframe B", "ok"); });
-        container.querySelector("#cmpRunA")?.addEventListener("click", () => SwitcherEngine.runUSKKeyframe(ws, idx, "A"));
-        container.querySelector("#cmpRunB")?.addEventListener("click", () => SwitcherEngine.runUSKKeyframe(ws, idx, "B"));
-        container.querySelector("#cmpRunFull")?.addEventListener("click", () => SwitcherEngine.runUSKKeyframe(ws, idx, "Full"));
+        container.querySelector("#cmpPosY")?.addEventListener("input", (e) => {
+            if (staging) { layer.y = Number(e.target.value); redrawStage(); }
+            else SwitcherEngine.setLayerPosition(liveWs, idx, layer.x, Number(e.target.value), group);
+        });
+        container.querySelector("#cmpScale")?.addEventListener("input", (e) => {
+            if (staging) { layer.size = Number(e.target.value); redrawStage(); }
+            else SwitcherEngine.setLayerSize(liveWs, idx, Number(e.target.value), group);
+        });
+        container.querySelector("#cmpResetTransform")?.addEventListener("click", () => {
+            if (staging) { layer.x = 0; layer.y = 0; layer.size = 1; render(container); }
+            else {
+                SwitcherEngine.setLayerPosition(liveWs, idx, 0, 0, group);
+                SwitcherEngine.setLayerSize(liveWs, idx, 1, group);
+            }
+        });
+        container.querySelector("#cmpFlyRate")?.addEventListener("change", (e) => SwitcherEngine.setUSKFlyRate(liveWs, idx, Number(e.target.value) || 25));
+        container.querySelector("#cmpSetA")?.addEventListener("click", () => { SwitcherEngine.setUSKKeyframe(liveWs, idx, "A"); AppUI.toast("Stored Keyframe A", "ok"); });
+        container.querySelector("#cmpSetB")?.addEventListener("click", () => { SwitcherEngine.setUSKKeyframe(liveWs, idx, "B"); AppUI.toast("Stored Keyframe B", "ok"); });
+        container.querySelector("#cmpRunA")?.addEventListener("click", () => SwitcherEngine.runUSKKeyframe(liveWs, idx, "A"));
+        container.querySelector("#cmpRunB")?.addEventListener("click", () => SwitcherEngine.runUSKKeyframe(liveWs, idx, "B"));
+        container.querySelector("#cmpRunFull")?.addEventListener("click", () => SwitcherEngine.runUSKKeyframe(liveWs, idx, "Full"));
 
         // Crop, Mask, Border
-        container.querySelector("#cmpCropEn")?.addEventListener("change", (e) => SwitcherEngine.setLayerCropEnabled(ws, idx, e.target.checked, group));
+        container.querySelector("#cmpCropEn")?.addEventListener("change", (e) => {
+            if (staging && cropHost) { cropHost.cropEnabled = e.target.checked; render(container); }
+            else SwitcherEngine.setLayerCropEnabled(liveWs, idx, e.target.checked, group);
+        });
         container.querySelector("#cmpCropLink")?.addEventListener("change", (e) => {
-            const host = isSS ? layer : state.resources.dves.find(d => d.id === layer.dveId);
-            if (host) host.cropLinked = e.target.checked;
+            if (cropHost) cropHost.cropLinked = e.target.checked;
         });
         container.querySelectorAll("[data-crop-edge]").forEach(rng => {
-            rng.addEventListener("input", (e) => SwitcherEngine.setLayerCropEdge(ws, idx, rng.dataset.cropEdge.replace("crop", "").toLowerCase(), Number(e.target.value), group));
+            rng.addEventListener("input", (e) => {
+                const edge = rng.dataset.cropEdge.replace("crop", "").toLowerCase();
+                if (staging && cropHost) {
+                    const pairs = { left: ["cropLeft", "cropRight"], right: ["cropRight", "cropLeft"], top: ["cropTop", "cropBottom"], bottom: ["cropBottom", "cropTop"] };
+                    const p = pairs[edge];
+                    if (p) {
+                        const v = Number(e.target.value) || 0;
+                        cropHost[p[0]] = v;
+                        if (cropHost.cropLinked) cropHost[p[1]] = v;
+                    }
+                    redrawStage();
+                } else {
+                    SwitcherEngine.setLayerCropEdge(liveWs, idx, edge, Number(e.target.value), group);
+                }
+            });
         });
-        container.querySelector("#cmpBorderEn")?.addEventListener("change", (e) => SwitcherEngine.setLayerBorderEnabled(ws, idx, e.target.checked, group));
-        container.querySelector("#cmpBorderW")?.addEventListener("input", (e) => SwitcherEngine.setLayerBorderWidth(ws, idx, Number(e.target.value), group));
-        container.querySelector("#cmpBorderCol")?.addEventListener("input", (e) => SwitcherEngine.setLayerBorderColor(ws, idx, e.target.value, group));
-        container.querySelector("#cmpMaskEn")?.addEventListener("change", (e) => SwitcherEngine.setLayerMaskEnabled(ws, idx, e.target.checked, group));
+        container.querySelector("#cmpBorderEn")?.addEventListener("change", (e) => {
+            if (staging && cropHost) { cropHost.borderEnabled = e.target.checked; render(container); }
+            else SwitcherEngine.setLayerBorderEnabled(liveWs, idx, e.target.checked, group);
+        });
+        container.querySelector("#cmpBorderW")?.addEventListener("input", (e) => {
+            if (staging && cropHost) { cropHost.borderWidth = Math.max(1, Math.min(20, Number(e.target.value) || 2)); redrawStage(); }
+            else SwitcherEngine.setLayerBorderWidth(liveWs, idx, Number(e.target.value), group);
+        });
+        container.querySelector("#cmpBorderCol")?.addEventListener("input", (e) => {
+            if (staging && cropHost) { cropHost.borderColor = String(e.target.value || "#ffffff"); redrawStage(); }
+            else SwitcherEngine.setLayerBorderColor(liveWs, idx, e.target.value, group);
+        });
+        container.querySelector("#cmpMaskEn")?.addEventListener("change", (e) => {
+            if (staging) { layer.maskEnabled = e.target.checked; render(container); }
+            else SwitcherEngine.setLayerMaskEnabled(liveWs, idx, e.target.checked, group);
+        });
         container.querySelector("#cmpMaskLink")?.addEventListener("change", (e) => { layer.maskLinked = e.target.checked; });
         container.querySelectorAll("[data-mask-edge]").forEach(rng => {
-            rng.addEventListener("input", (e) => SwitcherEngine.setLayerMaskEdge(ws, idx, rng.dataset.maskEdge.replace("mask", "").toLowerCase(), Number(e.target.value), group));
+            rng.addEventListener("input", (e) => {
+                const edge = rng.dataset.maskEdge.replace("mask", "").toLowerCase();
+                if (staging) {
+                    const pairs = { left: ["maskLeft", "maskRight"], right: ["maskRight", "maskLeft"], top: ["maskTop", "maskBottom"], bottom: ["maskBottom", "maskTop"] };
+                    const p = pairs[edge];
+                    if (p) {
+                        const v = Number(e.target.value) || 0;
+                        layer[p[0]] = v;
+                        if (layer.maskLinked) layer[p[1]] = v;
+                    }
+                    redrawStage();
+                } else {
+                    SwitcherEngine.setLayerMaskEdge(liveWs, idx, edge, Number(e.target.value));
+                }
+            });
         });
     }
 
-    return { render, renderCanvas, syncLiveStageOverlays, focusDSK, resetSelection };
+    return { render, renderCanvas, syncLiveStageOverlays, focusDSK, resetSelection, getEditMode: () => composeEditMode, setEditMode: setComposeEditMode };
 })();
