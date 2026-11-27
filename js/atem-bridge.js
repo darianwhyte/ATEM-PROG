@@ -16,11 +16,14 @@ const AtemBridge = (() => {
     let atemProduct = "";
     let liveSyncEnabled = false;
     let discoveredDevices = [];
+    let hardwareStills = [];
+    let hardwareClips = [];
     let isDiscovering = false;
     let _applyingHardwareEcho = false;
     let _pendingDiscoverResolve = null;
     const _recentOutbound = new Map();
-    const _throttleTimers = new Map();
+    const _throttleState = new Map();
+    const _lastSentSSBoxes = new Map();
     const _listeners = new Set();
 
     function markOutboundGuard(key) {
@@ -35,24 +38,56 @@ const AtemBridge = (() => {
         return false;
     }
 
-    function sendThrottled(key, delayMs, fn) {
+    // Leading + trailing edge pacer (never starves continuous 60fps animation/drag streams)
+    function sendThrottled(key, intervalMs, fn) {
         markOutboundGuard(key);
-        const existing = _throttleTimers.get(key);
-        if (existing) clearTimeout(existing.timer);
-        const timer = setTimeout(() => {
-            _throttleTimers.delete(key);
-            markOutboundGuard(key);
+        const now = Date.now();
+        let slot = _throttleState.get(key);
+        if (!slot) {
+            slot = { lastSent: 0, timer: null, pendingFn: null };
+            _throttleState.set(key, slot);
+        }
+        const elapsed = now - slot.lastSent;
+        if (elapsed >= intervalMs && !slot.timer) {
+            slot.lastSent = now;
+            slot.pendingFn = null;
             try { fn(); } catch (err) { console.error(err); }
-        }, delayMs);
-        _throttleTimers.set(key, { timer });
+            return;
+        }
+        slot.pendingFn = fn;
+        if (!slot.timer) {
+            const wait = Math.max(1, intervalMs - elapsed);
+            slot.timer = setTimeout(() => {
+                slot.timer = null;
+                slot.lastSent = Date.now();
+                const run = slot.pendingFn;
+                slot.pendingFn = null;
+                markOutboundGuard(key);
+                if (run) {
+                    try { run(); } catch (err) { console.error(err); }
+                }
+            }, wait);
+        }
     }
 
     function cancelThrottled(key) {
-        const existing = _throttleTimers.get(key);
-        if (existing) {
-            clearTimeout(existing.timer);
-            _throttleTimers.delete(key);
+        const slot = _throttleState.get(key);
+        if (slot) {
+            if (slot.timer) clearTimeout(slot.timer);
+            _throttleState.delete(key);
         }
+    }
+
+    function clearAllThrottles() {
+        if (_pubTimer) {
+            clearTimeout(_pubTimer);
+            _pubTimer = null;
+        }
+        _throttleState.forEach(slot => {
+            if (slot.timer) clearTimeout(slot.timer);
+        });
+        _throttleState.clear();
+        _lastSentSSBoxes.clear();
     }
 
     function getDefaultBridgeUrl() {
@@ -104,12 +139,15 @@ const AtemBridge = (() => {
             atemIp,
             liveSyncEnabled,
             discoveredDevices: [...discoveredDevices],
+            hardwareStills: hardwareStills.map(s => ({ ...s })),
+            hardwareClips: hardwareClips.map(c => ({ ...c })),
             isDiscovering
         };
     }
 
     function send(payload) {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+        const isOpen = !!ws && (ws.readyState === 1 || (typeof WebSocket !== "undefined" && ws.readyState === WebSocket.OPEN));
+        if (!isOpen) return false;
         ws.send(JSON.stringify(payload));
         return true;
     }
@@ -146,10 +184,21 @@ const AtemBridge = (() => {
     };
     const WIPE_PAT_NAMES = {
         0: "LeftToRightBar", 1: "TopToBottomBar", 2: "HorizontalBarnDoor", 3: "VerticalBarnDoor",
-        5: "RectangleIris", 6: "DiamondIris", 7: "CircleIris"
+        4: "CornersInFourBox", 5: "RectangleIris", 6: "DiamondIris", 7: "CircleIris",
+        8: "TopLeftBox", 9: "TopRightBox", 10: "BottomRightBox", 11: "BottomLeftBox",
+        12: "TopCentreBox", 13: "RightCentreBox", 14: "BottomCentreBox", 15: "LeftCentreBox",
+        16: "TopLeftDiagonal", 17: "TopRightDiagonal"
     };
     const DVE_STYLE_NAMES = {
-        28: "PushRight", 27: "PushLeft", 25: "PushUp", 30: "PushDown", 19: "SqueezeLeft", 4: "RevealRight"
+        0: "SwooshTopLeft", 1: "SwooshTop", 2: "SwooshTopRight", 3: "SwooshLeft",
+        4: "SwooshRight", 5: "SwooshBottomLeft", 6: "SwooshBottom", 7: "SwooshBottomRight",
+        8: "SpinCWTopLeft", 9: "SpinCWTopRight", 10: "SpinCWBottomLeft", 11: "SpinCWBottomRight",
+        12: "SpinCCWTopLeft", 13: "SpinCCWTopRight", 14: "SpinCCWBottomLeft", 15: "SpinCCWBottomRight",
+        16: "SqueezeTopLeft", 17: "SqueezeTop", 18: "SqueezeTopRight", 19: "SqueezeLeft",
+        20: "SqueezeRight", 21: "SqueezeBottomLeft", 22: "SqueezeBottom", 23: "SqueezeBottomRight",
+        24: "PushTopLeft", 25: "PushTop", 26: "PushTopRight", 27: "PushLeft",
+        28: "PushRight", 29: "PushBottomLeft", 30: "PushBottom", 31: "PushBottomRight",
+        32: "GraphicCWSpin", 33: "GraphicCCWSpin", 34: "GraphicLogoWipe"
     };
     const USK_PATTERN_NAMES = {
         0: "vertical", 1: "horizontal", 2: "horizontal", 3: "vertical", 5: "box", 6: "diamond", 7: "circle"
@@ -161,9 +210,18 @@ const AtemBridge = (() => {
         ProgramTop: 12, ProgramBottom: 3, ProgramLeft: 10, ProgramRight: 5, "16View": 0, "4View": 0
     };
 
-    function applyHardwareSnapshot(snap, { fullPull = false } = {}) {
+    function applyHardwareSnapshot(snap, { fullPull = false, selective = null } = {}) {
         if (!snap) return;
         _applyingHardwareEcho = true;
+        const wantSection = (key) => !selective || !!selective[key];
+        const wantIndex = (key, idx) => {
+            if (!selective) return true;
+            const v = selective[key];
+            if (Array.isArray(v)) return v.includes(idx);
+            return !!v;
+        };
+        let hasStructuralChange = fullPull || !!selective;
+        let hasTransitionFrame = false;
         try {
             if (fullPull) {
                 const matched = matchProfileByProduct(snap.product, snap.mixEffects?.length || 0, snap.superSources?.length || 0);
@@ -183,38 +241,77 @@ const AtemBridge = (() => {
             const styleNames = ["Mix", "Dip", "Wipe", "DVE"];
             const keyTypeNames = ["luma", "chroma", "pattern", "dve"];
 
-            // Sync M/E Program, Preview, Transition Properties, FTB & USKs
+            // Sync M/E Program, Preview, Transition Properties, Live Transition Progress, FTB & USKs
             (snap.mixEffects || []).forEach(me => {
+                if (!wantIndex("mixEffects", me.index)) return;
                 const target = state.workspaces.find(w => w.type === "me" && w.resourceId === me.index);
                 if (!target?.data) return;
-                target.data.source = AtemXml.atemNumericToSourceId(me.programInput);
-                target.data.previewSource = AtemXml.atemNumericToSourceId(me.previewInput);
+
+                const nextSrc = AtemXml.atemNumericToSourceId(me.programInput);
+                const nextPvw = AtemXml.atemNumericToSourceId(me.previewInput);
+                if (target.data.source !== nextSrc || target.data.previewSource !== nextPvw) hasStructuralChange = true;
+                target.data.source = nextSrc;
+                target.data.previewSource = nextPvw;
+
                 if (typeof me.transitionStyle === "number" && styleNames[me.transitionStyle]) {
+                    if (target.data.transitionStyle !== styleNames[me.transitionStyle]) hasStructuralChange = true;
                     target.data.transitionStyle = styleNames[me.transitionStyle];
                 }
                 if (Number.isFinite(me.transitionRate) && me.transitionRate > 0) {
-                    target.data.transitionRate = Math.max(1, Math.min(250, Math.round(me.transitionRate)));
+                    const nextRate = Math.max(1, Math.min(250, Math.round(me.transitionRate)));
+                    if (target.data.transitionRate !== nextRate) hasStructuralChange = true;
+                    target.data.transitionRate = nextRate;
                 }
-                if (me.transitionParams && !isOutboundGuarded(`me:${me.index}:tp`)) {
+                if (me.transitionParams && (fullPull || !!selective || !isOutboundGuarded(`me:${me.index}:tp`))) {
                     target.data.transitionParams ??= { dipSource: "color1", wipePattern: "LeftToRightBar", wipeReverse: false, dveEffect: "PushRight", dveReverse: false };
                     if (me.transitionParams.dipSource !== undefined) {
-                        target.data.transitionParams.dipSource = AtemXml.atemNumericToSourceId(me.transitionParams.dipSource) || "color1";
+                        const dipId = AtemXml.atemNumericToSourceId(me.transitionParams.dipSource) || "color1";
+                        if (target.data.transitionParams.dipSource !== dipId) hasStructuralChange = true;
+                        target.data.transitionParams.dipSource = dipId;
                     }
                     if (WIPE_PAT_NAMES[me.transitionParams.wipePattern]) {
-                        target.data.transitionParams.wipePattern = WIPE_PAT_NAMES[me.transitionParams.wipePattern];
+                        const wp = WIPE_PAT_NAMES[me.transitionParams.wipePattern];
+                        if (target.data.transitionParams.wipePattern !== wp) hasStructuralChange = true;
+                        target.data.transitionParams.wipePattern = wp;
                     }
                     if (typeof me.transitionParams.wipeReverse === "boolean") {
+                        if (target.data.transitionParams.wipeReverse !== me.transitionParams.wipeReverse) hasStructuralChange = true;
                         target.data.transitionParams.wipeReverse = me.transitionParams.wipeReverse;
                     }
                     if (DVE_STYLE_NAMES[me.transitionParams.dveEffect]) {
-                        target.data.transitionParams.dveEffect = DVE_STYLE_NAMES[me.transitionParams.dveEffect];
+                        const eff = DVE_STYLE_NAMES[me.transitionParams.dveEffect];
+                        if (target.data.transitionParams.dveEffect !== eff) hasStructuralChange = true;
+                        target.data.transitionParams.dveEffect = eff;
                     }
                     if (typeof me.transitionParams.dveReverse === "boolean") {
+                        if (target.data.transitionParams.dveReverse !== me.transitionParams.dveReverse) hasStructuralChange = true;
                         target.data.transitionParams.dveReverse = me.transitionParams.dveReverse;
                     }
                 }
                 if (typeof me.previewTransition === "boolean") {
+                    if (target.data.previewTransition !== me.previewTransition) hasStructuralChange = true;
                     target.data.previewTransition = me.previewTransition;
+                }
+                if (me.transitionPosition && !isOutboundGuarded(`me:${me.index}:pos`)) {
+                    const tp = me.transitionPosition;
+                    if (tp.inTransition) {
+                        const rate = Math.max(1, target.data.transitionRate || 25);
+                        const handlePos = Number(tp.handlePosition) || 0;
+                        const rem = Number(tp.remainingFrames) || 0;
+                        const prog = handlePos > 0
+                            ? Math.max(0, Math.min(1, handlePos / 10000))
+                            : (rem > 0 ? Math.max(0, Math.min(1, 1 - rem / rate)) : (target.data.transitionProgress || 0));
+                        target.data.transitionProgress = prog;
+                        if (!target.data._hwInTransition) hasStructuralChange = true;
+                        target.data._hwInTransition = true;
+                        target.data._hwRemainingFrames = rem;
+                        hasTransitionFrame = true;
+                    } else if (target.data._hwInTransition || (target.data.transitionProgress || 0) > 0) {
+                        target.data.transitionProgress = 0;
+                        target.data._hwInTransition = false;
+                        target.data._hwRemainingFrames = 0;
+                        hasStructuralChange = true;
+                    }
                 }
                 if (Array.isArray(me.nextSelection)) {
                     const selSet = new Set(me.nextSelection.map(Number));
@@ -228,17 +325,29 @@ const AtemBridge = (() => {
                     ];
                 }
                 if (target.data.ftb) {
-                    target.data.ftb.enabled = !!me.ftbFullyBlack;
-                    target.data.ftb.progress = me.ftbFullyBlack ? 1 : 0;
+                    const nextFtbBlack = !!me.ftbFullyBlack;
+                    if (target.data.ftb.enabled !== nextFtbBlack) hasStructuralChange = true;
+                    target.data.ftb.enabled = nextFtbBlack;
                     if (Number.isFinite(me.ftbRate) && me.ftbRate > 0) {
                         target.data.ftb.rate = Math.max(1, Math.min(250, Math.round(me.ftbRate)));
+                    }
+                    if (me.ftbInTransition) {
+                        const fRate = Math.max(1, target.data.ftb.rate || 25);
+                        const ratio = Math.max(0, Math.min(1, 1 - (Number(me.ftbRemainingFrames) || 0) / fRate));
+                        target.data.ftb.progress = nextFtbBlack ? (1 - ratio) : ratio;
+                        hasTransitionFrame = true;
+                    } else {
+                        target.data.ftb.progress = nextFtbBlack ? 1 : 0;
                     }
                 }
                 (me.usks || []).forEach(u => {
                     const usk = target.data.usk?.[u.index];
                     if (!usk) return;
-                    usk.enabled = !!u.onAir;
-                    usk.source = AtemXml.atemNumericToSourceId(u.fillSource);
+                    const uAir = !!u.onAir;
+                    const uSrc = AtemXml.atemNumericToSourceId(u.fillSource);
+                    if (usk.enabled !== uAir || usk.source !== uSrc) hasStructuralChange = true;
+                    usk.enabled = uAir;
+                    usk.source = uSrc;
                     if (!isOutboundGuarded(`me:${me.index}:usk:${u.index}:cfg`)) {
                         let mappedType = keyTypeNames[u.keyType] || "luma";
                         if (mappedType === "luma" && (usk.keyType === "linear" || (u.luma?.preMultiplied && u.cutSource > 0 && u.cutSource !== u.fillSource))) {
@@ -311,18 +420,29 @@ const AtemBridge = (() => {
             });
 
             // Sync Aux Outputs
-            (snap.auxilliaries || []).forEach(aux => {
-                const outData = getOutputData(aux.index + 1);
-                outData.source = AtemXml.atemNumericToSourceId(aux.source);
-            });
+            if (wantSection("auxOutputs")) {
+                (snap.auxilliaries || []).forEach(aux => {
+                    const outData = getOutputData(aux.index + 1);
+                    outData.source = AtemXml.atemNumericToSourceId(aux.source);
+                });
+            }
 
-            // Sync DSKs (2-way On-Air, Tie, Rate, Fill, Key, General & Mask)
+            // Sync DSKs (2-way On-Air, Transition Progress, Tie, Rate, Fill, Key, General & Mask)
             (snap.downstreamKeyers || []).forEach(d => {
+                if (!wantIndex("dsks", d.index)) return;
                 const dsk = getDSK(d.index);
                 if (dsk) {
+                    if (dsk.enabled !== !!d.onAir || dsk.tie !== !!d.tie) hasStructuralChange = true;
                     dsk.enabled = !!d.onAir;
                     dsk.tie = !!d.tie;
                     if (Number.isFinite(d.rate) && d.rate > 0) dsk.rate = d.rate;
+                    if (d.inTransition) {
+                        dsk.transitionProgress = Math.max(0, Math.min(1, 1 - (Number(d.remainingFrames) || 0) / Math.max(1, dsk.rate || 25)));
+                        hasTransitionFrame = true;
+                    } else if ((dsk.transitionProgress || 0) > 0) {
+                        dsk.transitionProgress = 0;
+                        hasStructuralChange = true;
+                    }
                     if (d.fillSource !== undefined) dsk.source = AtemXml.atemNumericToSourceId(d.fillSource);
                     if (d.keySource !== undefined) dsk.keySource = AtemXml.atemNumericToSourceId(d.keySource);
                     if (!isOutboundGuarded(`dsk:${d.index}:cfg`)) {
@@ -355,28 +475,32 @@ const AtemBridge = (() => {
             });
 
             // Sync Color Generators
-            (snap.colorGenerators || []).forEach(cg => {
-                if (isOutboundGuarded(`gen:${cg.index}`)) return;
-                const genId = cg.index === 0 ? "color1" : (cg.index === 1 ? "color2" : "");
-                if (!genId) return;
-                const hex = AtemXml.atemHslToHex((cg.hue ?? 0) / 10, (cg.saturation ?? 0) / 10, (cg.luma ?? 1000) / 10);
-                state.generators ??= {};
-                state.generators[genId] = hex;
-                const colEntry = state.colors?.find(c => c.id === genId);
-                if (colEntry) colEntry.color = hex;
-            });
+            if (wantSection("colorGenerators")) {
+                (snap.colorGenerators || []).forEach(cg => {
+                    if (isOutboundGuarded(`gen:${cg.index}`)) return;
+                    const genId = cg.index === 0 ? "color1" : (cg.index === 1 ? "color2" : "");
+                    if (!genId) return;
+                    const hex = AtemXml.atemHslToHex((cg.hue ?? 0) / 10, (cg.saturation ?? 0) / 10, (cg.luma ?? 1000) / 10);
+                    state.generators ??= {};
+                    state.generators[genId] = hex;
+                    const colEntry = state.colors?.find(c => c.id === genId);
+                    if (colEntry) colEntry.color = hex;
+                });
+            }
 
             // Sync Media Player slot assignments
-            (snap.mediaPlayers || []).forEach(mp => {
-                if (isOutboundGuarded(`mp:${mp.index}`)) return;
-                const targetMp = state.mediaPlayers?.[mp.index];
-                if (targetMp && mp.sourceType === 1) {
-                    targetMp.mediaId = Number.isFinite(mp.stillIndex) ? mp.stillIndex : null;
-                }
-            });
+            if (wantSection("mediaPlayers") || wantSection("stills") || wantSection("clips")) {
+                (snap.mediaPlayers || []).forEach(mp => {
+                    if (isOutboundGuarded(`mp:${mp.index}`)) return;
+                    const targetMp = state.mediaPlayers?.[mp.index];
+                    if (targetMp && mp.sourceType === 1) {
+                        targetMp.mediaId = Number.isFinite(mp.stillIndex) ? mp.stillIndex : null;
+                    }
+                });
+            }
 
             // Sync ATEM 10.2 Bus Mapping rules (captured via UDP 9910 raw interceptor)
-            if (Array.isArray(snap.busFollowRules)) {
+            if (wantSection("busMapping") && Array.isArray(snap.busFollowRules)) {
                 const localRules = Array.isArray(state.busFollowRules)
                     ? state.busFollowRules.filter(r => !r._hardwareSynced)
                     : [];
@@ -403,6 +527,7 @@ const AtemBridge = (() => {
             // Sync SuperSource boxes & Art (both Full Pull and Live Sync)
             if (Array.isArray(snap.superSources)) {
                 snap.superSources.forEach(ss => {
+                    if (!wantIndex("superSources", ss.index)) return;
                     const ws = state.workspaces.find(w => w.type === "superSource" && w.resourceId === ss.index);
                     if (!ws?.data) return;
                     if (!isOutboundGuarded(`ss:${ss.index}:art`)) {
@@ -417,11 +542,12 @@ const AtemBridge = (() => {
                     (ss.boxes || []).forEach(b => {
                         const box = ws.data.boxes?.[b.index];
                         if (!box) return;
+                        if (box.enabled !== !!b.enabled) hasStructuralChange = true;
                         box.enabled = !!b.enabled;
                         box.source = AtemXml.atemNumericToSourceId(b.source);
                         if (!isOutboundGuarded(`ss:${ss.index}:box:${b.index}`)) {
-                            box.x = Math.max(-16, Math.min(16, Number(b.x ?? 0)));
-                            box.y = Math.max(-9, Math.min(9, Number(b.y ?? 0)));
+                            box.x = Math.max(-32, Math.min(32, Number(b.x ?? 0)));
+                            box.y = Math.max(-18, Math.min(18, Number(b.y ?? 0)));
                             box.size = Math.max(0.07, Math.min(1, Number(b.size ?? 0.5)));
                             box.cropEnabled = !!b.cropped;
                             if (Number.isFinite(b.cropTop)) box.cropTop = b.cropTop;
@@ -436,6 +562,7 @@ const AtemBridge = (() => {
             // Sync Multi-View layout, options & windows
             if (Array.isArray(snap.multiViewers)) {
                 snap.multiViewers.forEach(mv => {
+                    if (!wantIndex("multiViewers", mv.index)) return;
                     if (isOutboundGuarded(`mv:${mv.index}`)) return;
                     const targetMv = getMultiView(mv.index);
                     if (typeof mv.layout === "number" && MV_LAYOUT_TO_INTERNAL[mv.layout]) {
@@ -457,20 +584,92 @@ const AtemBridge = (() => {
             }
 
             // Sync Input Short/Long Labels & Aux Output Labels (8001+)
-            Object.entries(snap.inputs || {}).forEach(([idStr, meta]) => {
-                const num = parseInt(idStr, 10);
-                if (num >= 1 && num <= 80 && meta) {
-                    state.inputs[num] ??= { label: "", shortName: "", thumbnail: null, notes: "" };
-                    if (meta.longName) state.inputs[num].label = meta.longName;
-                    if (meta.shortName) state.inputs[num].shortName = meta.shortName;
-                } else if (num >= 8001 && num <= 8099 && meta?.longName) {
-                    const outData = getOutputData(num - 8000);
-                    if (outData) outData.label = meta.longName;
-                }
-            });
+            if (wantSection("inputs") || wantSection("auxOutputs")) {
+                Object.entries(snap.inputs || {}).forEach(([idStr, meta]) => {
+                    const num = parseInt(idStr, 10);
+                    if (num >= 1 && num <= 80 && meta && wantSection("inputs")) {
+                        state.inputs[num] ??= { label: "", shortName: "", thumbnail: null, notes: "" };
+                        if (meta.longName) state.inputs[num].label = meta.longName;
+                        if (meta.shortName) state.inputs[num].shortName = meta.shortName;
+                    } else if (num >= 8001 && num <= 8099 && meta?.longName && wantSection("auxOutputs")) {
+                        const outData = getOutputData(num - 8000);
+                        if (outData) outData.label = meta.longName;
+                    }
+                });
+            }
 
-            // Sync Hardware Macro Pool Metadata on full pull (+ fetch full macro steps)
-            if (fullPull && Array.isArray(snap.macros) && typeof MacroEngine !== "undefined") {
+            // Sync Live Streaming & Recording Hardware State
+            if (wantSection("streamingRecording") && snap.streaming && typeof snap.streaming === "object") {
+                state.streaming ??= typeof createDefaultStreamingState === "function" ? createDefaultStreamingState() : {};
+                state.streaming._hardwareSupported = true;
+                if (snap.streaming.status) state.streaming.status = snap.streaming.status;
+                if (snap.streaming.error !== undefined) state.streaming.error = snap.streaming.error || "None";
+                if (Number.isFinite(snap.streaming.encodingBitrate)) state.streaming.encodingBitrate = snap.streaming.encodingBitrate;
+                if (Number.isFinite(snap.streaming.cacheUsed)) state.streaming.cacheUsed = snap.streaming.cacheUsed;
+                if (snap.streaming.duration && Number.isFinite(snap.streaming.duration.seconds)) {
+                    state.streaming.duration = {
+                        hours: snap.streaming.duration.hours || 0,
+                        minutes: snap.streaming.duration.minutes || 0,
+                        seconds: snap.streaming.duration.seconds || 0,
+                        frames: snap.streaming.duration.frames || 0
+                    };
+                    state.streaming._hardwareDurationSync = true;
+                }
+                if (!isOutboundGuarded("stream:cfg")) {
+                    if (snap.streaming.serviceName) state.streaming.serviceName = snap.streaming.serviceName;
+                    if (typeof snap.streaming.url === "string") state.streaming.url = snap.streaming.url;
+                    if (typeof snap.streaming.key === "string") state.streaming.key = snap.streaming.key;
+                    if (Array.isArray(snap.streaming.bitrates) && snap.streaming.bitrates.length >= 2) {
+                        state.streaming.bitrates = [...snap.streaming.bitrates];
+                        const presets = typeof SwitcherEngine !== "undefined" ? SwitcherEngine.STREAM_QUALITY_PRESETS : null;
+                        if (presets) {
+                            const match = Object.entries(presets).find(([, br]) => br[0] === snap.streaming.bitrates[0] && br[1] === snap.streaming.bitrates[1]);
+                            if (match) state.streaming.quality = match[0];
+                        }
+                    }
+                    if (snap.streaming.audioBitrates) state.streaming.audioBitrates = { ...snap.streaming.audioBitrates };
+                }
+            } else if (fullPull && state.streaming) {
+                state.streaming._hardwareSupported = false;
+            }
+
+            if (wantSection("streamingRecording") && snap.recording && typeof snap.recording === "object") {
+                state.recording ??= typeof createDefaultRecordingState === "function" ? createDefaultRecordingState() : {};
+                state.recording._hardwareSupported = true;
+                if (snap.recording.status) state.recording.status = snap.recording.status;
+                if (snap.recording.error !== undefined) state.recording.error = snap.recording.error || "None";
+                if (Number.isFinite(snap.recording.recordingTimeAvailable)) state.recording.recordingTimeAvailable = snap.recording.recordingTimeAvailable;
+                if (snap.recording.duration && Number.isFinite(snap.recording.duration.seconds)) {
+                    state.recording.duration = {
+                        hours: snap.recording.duration.hours || 0,
+                        minutes: snap.recording.duration.minutes || 0,
+                        seconds: snap.recording.duration.seconds || 0,
+                        frames: snap.recording.duration.frames || 0
+                    };
+                    state.recording._hardwareDurationSync = true;
+                }
+                if (Array.isArray(snap.recording.disks)) state.recording.disks = snap.recording.disks;
+                if (!isOutboundGuarded("rec:cfg")) {
+                    if (typeof snap.recording.filename === "string") state.recording.filename = snap.recording.filename;
+                    if (snap.recording.workingSet1DiskId !== undefined) state.recording.workingSet1DiskId = snap.recording.workingSet1DiskId;
+                    if (snap.recording.workingSet2DiskId !== undefined) state.recording.workingSet2DiskId = snap.recording.workingSet2DiskId;
+                    if (typeof snap.recording.recordInAllCameras === "boolean") state.recording.recordInAllCameras = snap.recording.recordInAllCameras;
+                    if (typeof snap.recording.recordAllInputs === "boolean") state.recording.recordAllInputs = snap.recording.recordAllInputs;
+                }
+            } else if (fullPull && state.recording) {
+                state.recording._hardwareSupported = false;
+            }
+
+            // Sync Hardware Still & Clip Pool summaries
+            if (Array.isArray(snap.stills)) {
+                hardwareStills = snap.stills.map(s => ({ ...s }));
+            }
+            if (Array.isArray(snap.clips)) {
+                hardwareClips = snap.clips.map(c => ({ ...c }));
+            }
+
+            // Sync Hardware Macro Pool Metadata on full pull or selective macro pull (+ fetch full macro steps)
+            if ((fullPull || (selective && selective.macros)) && Array.isArray(snap.macros) && typeof MacroEngine !== "undefined") {
                 MacroEngine.ensureMacroPool();
                 snap.macros.forEach(m => {
                     if (!MacroEngine.isValidMacroSlot(m.index)) return;
@@ -487,15 +686,23 @@ const AtemBridge = (() => {
                 if (atemConnected) send({ cmd: "pullMacros" });
             }
 
-            if (fullPull) {
+            if (fullPull || selective) {
                 buildSources();
                 if (typeof HistoryManager !== "undefined") HistoryManager.checkpoint();
                 if (typeof StateStorage !== "undefined") StateStorage.saveNow();
-                emit({ notice: `Pulled full configuration from ${snap.product || atemIp}.` });
+                emit({
+                    notice: fullPull
+                        ? `Pulled full configuration from ${snap.product || atemIp}.`
+                        : `Pulled selected settings from ${snap.product || atemIp}.`
+                });
             }
 
             schedulePublishStudioState();
-            notifyUI(fullPull ? "bridgePull" : "bridgeSync");
+            if (!fullPull && !selective && hasTransitionFrame && !hasStructuralChange) {
+                notifyUI("bridgeTransitionFrame");
+            } else {
+                notifyUI(fullPull || selective ? "bridgePull" : "bridgeSync");
+            }
         } finally {
             _applyingHardwareEcho = false;
         }
@@ -583,7 +790,7 @@ const AtemBridge = (() => {
                         StateStorage.scheduleSave();
                     }
                     notifyUI("mediaPool");
-                    emit({ notice: `Downloaded Still Slot ${slot + 1} into Media Pool.` });
+                    if (!msg.batch) emit({ notice: `Downloaded Still Slot ${slot + 1} into Media Pool.` });
                 }, "image/png");
             } else {
                 const ch = Math.max(1, parseInt(msg.targetInput, 10) || 1);
@@ -606,10 +813,125 @@ const AtemBridge = (() => {
                 if (typeof StateStorage !== "undefined") {
                     StateStorage.saveThumbnail(SourceTypes.EXTERNAL, ch, jpegUrl);
                 }
-                emit({ notice: `Captured ATEM Program still → Input ${ch} thumbnail.` });
+                if (!msg.batch) emit({ notice: `Captured ATEM Program still → Input ${ch} thumbnail.` });
             }
         };
         img.src = msg.dataUrl;
+    }
+
+    function handleIncomingClipPreview(msg) {
+        if (!msg?.dataUrl) return;
+        const clipIdx = Math.max(0, Number(msg.clipIndex) || 0);
+        const existingClips = (state.media || []).filter(m => m.kind === "video");
+        const existingBySlot = existingClips.find(m => m._hardwareClipIndex === clipIdx);
+        const usedIds = new Set((state.media || []).map(m => m.id));
+        let itemId = existingBySlot?.id;
+        if (!Number.isFinite(itemId)) {
+            itemId = 1000 + clipIdx;
+            while (usedIds.has(itemId)) itemId++;
+        }
+        const mediaItem = {
+            id: itemId,
+            kind: "video",
+            name: msg.name || `Clip ${clipIdx + 1}`,
+            url: msg.dataUrl,
+            nativeWidth: msg.width || state.canvas?.width || 1920,
+            nativeHeight: msg.height || state.canvas?.height || 1080,
+            _hardwareClipIndex: clipIdx,
+            frameCount: Number(msg.frameCount) || 0
+        };
+        state.media ??= [];
+        const idx = state.media.findIndex(m => m.id === itemId);
+        if (idx >= 0) state.media[idx] = mediaItem;
+        else state.media.push(mediaItem);
+        state.media.sort((a, b) => a.id - b.id);
+        if (typeof StateStorage !== "undefined") StateStorage.scheduleSave();
+        notifyUI("mediaPool");
+    }
+
+    function uint8ToBase64(bytes) {
+        let bin = "";
+        for (let i = 0; i < bytes.length; i += 32768) {
+            bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 32768));
+        }
+        return btoa(bin);
+    }
+
+    async function imageUrlToRgbaBase64(url, width, height) {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = () => reject(new Error("Failed to load image for upload"));
+            img.src = url;
+        });
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        const rgba = ctx.getImageData(0, 0, width, height).data;
+        return uint8ToBase64(rgba);
+    }
+
+    async function uploadMediaToAtem({ stills, clips } = {}) {
+        if (!atemConnected) {
+            emit({ error: "Connect to an ATEM switcher first." });
+            return 0;
+        }
+        const w = state.canvas?.width || 1920;
+        const h = state.canvas?.height || 1080;
+        let uploaded = 0;
+
+        if (stills) {
+            const localStills = (state.media || []).filter(m => m.kind !== "video");
+            const wanted = Array.isArray(stills) ? localStills.filter(m => stills.includes(m.id)) : localStills;
+            for (const item of wanted) {
+                try {
+                    const rgbaBase64 = await imageUrlToRgbaBase64(item.url, w, h);
+                    send({ cmd: "uploadStill", slot: item.id, name: item.name || `Still ${item.id + 1}`, description: "", rgbaBase64 });
+                    uploaded++;
+                } catch {}
+            }
+        }
+
+        if (clips) {
+            const localClips = (state.media || []).filter(m => m.kind === "video");
+            const wanted = Array.isArray(clips)
+                ? localClips.filter((m, idx) => clips.includes(m._hardwareClipIndex ?? idx))
+                : localClips;
+            for (let ci = 0; ci < wanted.length; ci++) {
+                const item = wanted[ci];
+                const clipSlot = Number.isFinite(item._hardwareClipIndex) ? item._hardwareClipIndex : ci;
+                try {
+                    const vid = document.createElement("video");
+                    vid.muted = true;
+                    vid.playsInline = true;
+                    vid.src = item.url;
+                    await new Promise((resolve, reject) => {
+                        vid.onloadedmetadata = resolve;
+                        vid.onerror = () => reject(new Error("Video decode failed"));
+                    });
+                    const dur = Number.isFinite(vid.duration) && vid.duration > 0 ? vid.duration : 1;
+                    const maxFrames = Math.min(45, Math.max(1, Math.round(Math.min(dur, 1.5) * 30)));
+                    const canvas = document.createElement("canvas");
+                    canvas.width = w;
+                    canvas.height = h;
+                    const ctx = canvas.getContext("2d");
+                    send({ cmd: "uploadClipStart", clipIndex: clipSlot, name: item.name || `Clip ${clipSlot + 1}` });
+                    for (let f = 0; f < maxFrames; f++) {
+                        vid.currentTime = maxFrames > 1 ? (f / (maxFrames - 1)) * Math.min(dur, 1.5) : 0;
+                        await new Promise(r => { vid.onseeked = r; setTimeout(r, 80); });
+                        ctx.drawImage(vid, 0, 0, w, h);
+                        const rgbaBase64 = uint8ToBase64(ctx.getImageData(0, 0, w, h).data);
+                        send({ cmd: "uploadClipFrame", clipIndex: clipSlot, rgbaBase64 });
+                    }
+                    send({ cmd: "uploadClipFinish", clipIndex: clipSlot });
+                    uploaded++;
+                } catch {}
+            }
+        }
+        return uploaded;
     }
 
     function ensureSocket(url = bridgeUrl) {
@@ -665,7 +987,10 @@ const AtemBridge = (() => {
                                 : "No ATEM switchers advertised via mDNS — enter IP manually."
                         });
                     } else if (msg.type === "fullConfig") {
-                        applyHardwareSnapshot(msg.snapshot, { fullPull: true });
+                        applyHardwareSnapshot(msg.snapshot, {
+                            fullPull: !msg.selective,
+                            selective: msg.selective || null
+                        });
                     } else if (msg.type === "hardwareMacros") {
                         handleIncomingHardwareMacros(msg.macros);
                     } else if (msg.type === "pushComplete") {
@@ -676,6 +1001,24 @@ const AtemBridge = (() => {
                         handleIncomingRemoteAction(msg.action);
                     } else if (msg.type === "stillImage") {
                         handleIncomingStill(msg);
+                    } else if (msg.type === "clipPreview") {
+                        handleIncomingClipPreview(msg);
+                    } else if (msg.type === "allStillsComplete") {
+                        emit({
+                            notice: msg.count
+                                ? `Downloaded ${msg.count} populated still(s) from ATEM Media Pool.`
+                                : (msg.message || "No populated stills found in ATEM Media Pool.")
+                        });
+                    } else if (msg.type === "allClipsComplete") {
+                        emit({
+                            notice: msg.count
+                                ? `Downloaded ${msg.count} clip preview(s) from ATEM Media Pool.`
+                                : (msg.message || "No populated clips found in ATEM Media Pool.")
+                        });
+                    } else if (msg.type === "mediaSyncItem") {
+                        emit({ notice: `Synced ${msg.kind || "media"} slot ${(Number(msg.slot) || 0) + 1} to ATEM.` });
+                    } else if (msg.type === "scanInputsComplete") {
+                        emit({ notice: `Captured ${msg.count || 0} input thumbnail(s) via ATEM Program.` });
                     } else if (msg.type === "error") {
                         emit({ error: msg.message });
                     }
@@ -742,14 +1085,17 @@ const AtemBridge = (() => {
     }
 
     function disconnect() {
+        clearAllThrottles();
         if (ws) {
             try { send({ cmd: "disconnect" }); } catch {}
-            try { ws.close(); } catch {}
+            try { ws.close?.(); } catch {}
             ws = null;
         }
         bridgeOpen = false;
         atemConnected = false;
         atemProduct = "";
+        hardwareStills = [];
+        hardwareClips = [];
         emit();
     }
 
@@ -762,6 +1108,41 @@ const AtemBridge = (() => {
         return send({ cmd: "pullConfig" });
     }
 
+    function pullSelectiveConfig(sections = {}) {
+        if (!atemConnected) {
+            emit({ error: "Connect to an ATEM switcher first." });
+            return false;
+        }
+        const configSections = {};
+        const cfgKeys = ["inputs", "auxOutputs", "colorGenerators", "dsks", "mixEffects", "superSources", "multiViewers", "busMapping", "streamingRecording", "mediaPlayers"];
+        let hasCfg = false;
+        cfgKeys.forEach(k => {
+            if (sections[k]) {
+                configSections[k] = sections[k];
+                hasCfg = true;
+            }
+        });
+        if (sections.macros) configSections.macros = true;
+        if (hasCfg || sections.macros) {
+            emit({ notice: "Pulling selected configuration from ATEM..." });
+            send({ cmd: "pullConfig", selective: configSections });
+        }
+        if (sections.stills) {
+            send({
+                cmd: "downloadAllStills",
+                purpose: "mediaPool",
+                ...(Array.isArray(sections.stills) ? { slots: sections.stills } : {})
+            });
+        }
+        if (sections.clips) {
+            send({
+                cmd: "downloadClips",
+                ...(Array.isArray(sections.clips) ? { clipIndices: sections.clips } : {})
+            });
+        }
+        return true;
+    }
+
     function pushConfig(sections = { inputs: true, auxOutputs: true, mixEffects: false, superSources: false, multiViewers: false }) {
         if (!atemConnected) {
             emit({ error: "Connect to an ATEM switcher first." });
@@ -769,6 +1150,11 @@ const AtemBridge = (() => {
         }
         const profile = getProfile() || {};
         const config = {};
+
+        const matchesFilter = (sel, idx) => {
+            if (Array.isArray(sel)) return sel.includes(idx);
+            return !!sel;
+        };
 
         if (sections.inputs) {
             config.inputs = [];
@@ -808,39 +1194,80 @@ const AtemBridge = (() => {
             });
         }
         if (sections.dsks) {
-            config.dsks = getAvailableDSKs().map(d => ({
-                index: d.id,
-                fillSource: AtemXml.sourceIdToAtemNumeric(d.source),
-                keySource: AtemXml.sourceIdToAtemNumeric(d.keySource),
-                rate: d.rate || 25,
-                tie: !!d.tie,
-                preMultiply: !!d.keySettings?.linear?.premultiplied,
-                clip: Math.round((d.keySettings?.linear?.clip ?? 50) * 10),
-                gain: Math.round((d.keySettings?.linear?.gain ?? 50) * 10),
-                invert: !!(d.keySettings?.linear?.invert),
-                mask: {
-                    enabled: !!d.maskEnabled,
-                    top: Math.round(AtemXml.internalMaskToAtem("top", d.maskTop ?? 0) * 1000),
-                    bottom: Math.round(AtemXml.internalMaskToAtem("bottom", d.maskBottom ?? 0) * 1000),
-                    left: Math.round(AtemXml.internalMaskToAtem("left", d.maskLeft ?? 0) * 1000),
-                    right: Math.round(AtemXml.internalMaskToAtem("right", d.maskRight ?? 0) * 1000)
-                }
-            }));
+            config.dsks = getAvailableDSKs()
+                .filter(d => matchesFilter(sections.dsks, d.id))
+                .map(d => ({
+                    index: d.id,
+                    fillSource: AtemXml.sourceIdToAtemNumeric(d.source),
+                    keySource: AtemXml.sourceIdToAtemNumeric(d.keySource),
+                    rate: d.rate || 25,
+                    tie: !!d.tie,
+                    preMultiply: !!d.keySettings?.linear?.premultiplied,
+                    clip: Math.round((d.keySettings?.linear?.clip ?? 50) * 10),
+                    gain: Math.round((d.keySettings?.linear?.gain ?? 50) * 10),
+                    invert: !!(d.keySettings?.linear?.invert),
+                    mask: {
+                        enabled: !!d.maskEnabled,
+                        top: Math.round(AtemXml.internalMaskToAtem("top", d.maskTop ?? 0) * 1000),
+                        bottom: Math.round(AtemXml.internalMaskToAtem("bottom", d.maskBottom ?? 0) * 1000),
+                        left: Math.round(AtemXml.internalMaskToAtem("left", d.maskLeft ?? 0) * 1000),
+                        right: Math.round(AtemXml.internalMaskToAtem("right", d.maskRight ?? 0) * 1000)
+                    }
+                }));
         }
         if (sections.mixEffects) {
+            const maxUsk = typeof getUpstreamKeyersPerME === "function" ? getUpstreamKeyersPerME(profile) : 4;
             config.mixEffects = state.workspaces
-                .filter(w => w.type === "me" && isWorkspaceAvailable(w))
-                .map(w => ({
-                    index: w.resourceId,
-                    programInput: AtemXml.sourceIdToAtemNumeric(w.data.source),
-                    previewInput: AtemXml.sourceIdToAtemNumeric(w.data.previewSource)
-                }));
+                .filter(w => w.type === "me" && isWorkspaceAvailable(w) && matchesFilter(sections.mixEffects, w.resourceId))
+                .map(w => {
+                    const tp = w.data.transitionParams || {};
+                    const nt = w.data.nextTransition || { bkgd: true, usk: [] };
+                    const sel = [];
+                    if (nt.bkgd !== false) sel.push(1);
+                    for (let i = 0; i < Math.min(maxUsk, (nt.usk || []).length); i++) {
+                        if (nt.usk[i]) sel.push(1 << (i + 1));
+                    }
+                    if (!sel.length) sel.push(1);
+                    return {
+                        index: w.resourceId,
+                        programInput: AtemXml.sourceIdToAtemNumeric(w.data.source),
+                        previewInput: AtemXml.sourceIdToAtemNumeric(w.data.previewSource),
+                        transitionStyle: w.data.transitionStyle || "Mix",
+                        transitionRate: w.data.transitionRate || 25,
+                        previewTransition: !!w.data.previewTransition,
+                        nextSelection: sel,
+                        transitionParams: {
+                            dipInput: AtemXml.sourceIdToAtemNumeric(tp.dipSource || "color1"),
+                            wipePattern: tp.wipePattern || "LeftToRightBar",
+                            wipeReverse: !!tp.wipeReverse,
+                            dveEffect: tp.dveEffect || "PushRight",
+                            dveReverse: !!tp.dveReverse
+                        },
+                        usks: (w.data.usk || []).slice(0, maxUsk).map((u, idx) => ({
+                            index: idx,
+                            onAir: !!u.enabled,
+                            fillSource: AtemXml.sourceIdToAtemNumeric(u.source),
+                            cutSource: AtemXml.sourceIdToAtemNumeric(u.keySettings?.[u.keyType === "linear" ? "linear" : u.keyType]?.keySource || u.source),
+                            keyType: u.keyType || "luma",
+                            flyEnabled: !!u.flyingKey
+                        }))
+                    };
+                });
         }
         if (sections.superSources) {
             config.superSources = state.workspaces
-                .filter(w => w.type === "superSource" && isWorkspaceAvailable(w))
+                .filter(w => w.type === "superSource" && isWorkspaceAvailable(w) && matchesFilter(sections.superSources, w.resourceId))
                 .map(w => ({
                     index: w.resourceId,
+                    art: {
+                        artFillSource: AtemXml.sourceIdToAtemNumeric(w.data.artSource),
+                        artCutSource: AtemXml.sourceIdToAtemNumeric(w.data.artKeySource),
+                        artOption: w.data.artPlace === "Foreground" ? 1 : 0,
+                        artPreMultiplied: !!w.data.artPremultiplied,
+                        artClip: w.data.artClip ?? 50,
+                        artGain: w.data.artGain ?? 50,
+                        artInvertKey: !!w.data.artInvert
+                    },
                     boxes: (w.data.boxes || []).map((b, i) => ({
                         index: i,
                         enabled: !!b.enabled,
@@ -860,6 +1287,7 @@ const AtemBridge = (() => {
             const mvCount = typeof getMultiviewerCount === "function" ? getMultiviewerCount(profile) : 1;
             config.multiViewers = [];
             for (let m = 0; m < mvCount; m++) {
+                if (!matchesFilter(sections.multiViewers, m)) continue;
                 const mv = getMultiView(m);
                 const boxCount = PopoutManager.getMvBoxCount(mv.layout);
                 const windows = [];
@@ -875,8 +1303,27 @@ const AtemBridge = (() => {
             }
         }
 
-        emit({ notice: "Pushing selected settings to ATEM switcher..." });
-        return send({ cmd: "pushConfig", config });
+        const hasConfigKeys = Object.keys(config).length > 0;
+        if (hasConfigKeys) {
+            emit({ notice: "Pushing selected settings to ATEM switcher..." });
+            send({ cmd: "pushConfig", config });
+        }
+        if (sections.stills || sections.clips) {
+            uploadMediaToAtem({ stills: sections.stills, clips: sections.clips });
+        }
+        return true;
+    }
+
+    function pushFullConfig() {
+        return pushConfig({
+            inputs: true,
+            auxOutputs: true,
+            colorGenerators: true,
+            mixEffects: true,
+            superSources: true,
+            dsks: true,
+            multiViewers: true
+        });
     }
 
     function setLiveSync(enabled) {
@@ -890,7 +1337,16 @@ const AtemBridge = (() => {
             return false;
         }
         emit({ notice: `Capturing Program still from ATEM for Input ${targetInput}...` });
-        return send({ cmd: "captureStill", purpose: "thumbnail", targetInput: Number(targetInput) || 1 });
+        return send({ cmd: "captureStill", purpose: "thumbnail", targetInput: Number(targetInput) || 1, clearTempSlot: true });
+    }
+
+    function capturePgmStillToMediaPool() {
+        if (!atemConnected) {
+            emit({ error: "Connect to an ATEM switcher first." });
+            return false;
+        }
+        emit({ notice: "Capturing Program still to Media Pool..." });
+        return send({ cmd: "captureStill", purpose: "mediaPool" });
     }
 
     function pullStillToMediaPool(slotIndex = 0) {
@@ -900,6 +1356,28 @@ const AtemBridge = (() => {
         }
         emit({ notice: `Downloading Media Pool Slot ${slotIndex + 1} from ATEM...` });
         return send({ cmd: "downloadStill", purpose: "mediaPool", slot: Math.max(0, Number(slotIndex) || 0) });
+    }
+
+    function pullAllStillsToMediaPool() {
+        if (!atemConnected) {
+            emit({ error: "Connect to an ATEM switcher first." });
+            return false;
+        }
+        emit({ notice: "Downloading all populated stills from ATEM Media Pool..." });
+        return send({ cmd: "downloadAllStills", purpose: "mediaPool" });
+    }
+
+    function scanInputsViaPgm(inputChannels) {
+        if (!atemConnected) {
+            emit({ error: "Connect to an ATEM switcher first." });
+            return false;
+        }
+        const profile = getProfile() || {};
+        const list = Array.isArray(inputChannels) && inputChannels.length
+            ? inputChannels
+            : Array.from({ length: Math.min(20, profile.inputs || 4) }, (_, i) => i + 1);
+        emit({ notice: `Scanning ${list.length} input(s) via ATEM Program...` });
+        return send({ cmd: "scanInputsViaPgm", inputs: list });
     }
 
     function pullHardwareMacros() {
@@ -1074,6 +1552,17 @@ const AtemBridge = (() => {
             ssPresets,
             macros,
             activeClips,
+            streaming: state.streaming ? {
+                status: state.streaming.status || "idle",
+                serviceName: state.streaming.serviceName || "",
+                duration: state.streaming.duration || { hours: 0, minutes: 0, seconds: 0 }
+            } : null,
+            recording: state.recording ? {
+                status: state.recording.status || "idle",
+                filename: state.recording.filename || "",
+                recordAllInputs: !!state.recording.recordAllInputs,
+                duration: state.recording.duration || { hours: 0, minutes: 0, seconds: 0 }
+            } : null,
             customBusPages: Array.isArray(state.customBusPages) ? state.customBusPages : []
         };
     }
@@ -1168,8 +1657,16 @@ const AtemBridge = (() => {
             }
         } else if (a.type === "runMacro" && typeof MacroPlayer !== "undefined") {
             MacroPlayer.playMacro(Number(a.index) || 0, { mode: "live", speed: 1 });
+        } else if (a.type === "toggleStream") {
+            if (state.streaming?.status === "streaming" || state.streaming?.status === "connecting") SwitcherEngine.stopStreaming();
+            else SwitcherEngine.startStreaming();
+        } else if (a.type === "toggleRecord") {
+            if (state.recording?.status === "recording") SwitcherEngine.stopRecording();
+            else SwitcherEngine.startRecording();
         }
     }
+
+    let _subscribed = false;
 
     function init() {
         loadPrefs();
@@ -1179,11 +1676,16 @@ const AtemBridge = (() => {
                 if (ok) schedulePublishStudioState();
             }).catch(() => {});
         }
+        ensureEngineSubscription();
+    }
 
-        if (typeof SwitcherEngine === "undefined") return;
+    function ensureEngineSubscription() {
+        if (_subscribed || typeof SwitcherEngine === "undefined") return;
+        _subscribed = true;
         const TRANSIENT_REASONS = new Set([
-            "transitionAutoFrame", "dskAutoFrame",
-            "transitionAutoStart", "dskAutoStart", "ftbStart", "superSourceAnimFrame"
+            "transitionAutoFrame", "transitionPosition", "dskAutoFrame",
+            "transitionAutoStart", "dskAutoStart", "ftbStart", "superSourceAnimFrame",
+            "streamTick", "recordTick"
         ]);
         SwitcherEngine.subscribe((ev) => {
             const reason = ev?.reason;
@@ -1205,6 +1707,14 @@ const AtemBridge = (() => {
                 send({ cmd: "cut", me: meIdx });
             } else if (reason === "transitionAutoStart" && meWs) {
                 send({ cmd: "auto", me: meIdx });
+            } else if (reason === "transitionPosition" && meWs) {
+                sendThrottled(`me:${meIdx}:tbar`, 33, () => {
+                    send({
+                        cmd: "setTransitionPosition",
+                        me: meIdx,
+                        position: Math.max(0, Math.min(10000, Math.round((meWs.data.transitionProgress || 0) * 10000)))
+                    });
+                });
             } else if (reason === "ftbStart" && meWs) {
                 send({ cmd: "ftb", me: meIdx });
             } else if (reason === "transitionStyle" && meWs) {
@@ -1266,7 +1776,8 @@ const AtemBridge = (() => {
                 if (usk) {
                     const gKey = `me:${ev.me}:usk:${ev.usk}:cfg`;
                     markOutboundGuard(gKey);
-                    sendThrottled(gKey, 45, () => {
+                    sendThrottled(`me:${ev.me}:usk:${ev.usk}:luma`, 45, () => {
+                        markOutboundGuard(gKey);
                         const isLin = usk.keyType === "linear";
                         const src = isLin ? usk.keySettings?.linear : usk.keySettings?.luma;
                         send({
@@ -1289,7 +1800,8 @@ const AtemBridge = (() => {
                 if (usk?.keySettings?.chroma) {
                     const gKey = `me:${ev.me}:usk:${ev.usk}:cfg`;
                     markOutboundGuard(gKey);
-                    sendThrottled(gKey, 45, () => {
+                    sendThrottled(`me:${ev.me}:usk:${ev.usk}:chroma`, 45, () => {
+                        markOutboundGuard(gKey);
                         const c = usk.keySettings.chroma;
                         const hsl = AtemXml.hexToAtemHsl(c.sampleColor || "#00ff00");
                         send({
@@ -1309,7 +1821,8 @@ const AtemBridge = (() => {
                 if (usk?.keySettings?.pattern) {
                     const gKey = `me:${ev.me}:usk:${ev.usk}:cfg`;
                     markOutboundGuard(gKey);
-                    sendThrottled(gKey, 45, () => {
+                    sendThrottled(`me:${ev.me}:usk:${ev.usk}:pattern`, 45, () => {
+                        markOutboundGuard(gKey);
                         const p = usk.keySettings.pattern;
                         send({
                             cmd: "setUSKPattern",
@@ -1327,7 +1840,8 @@ const AtemBridge = (() => {
                 if (usk) {
                     const gKey = `me:${ev.me}:usk:${ev.usk}:cfg`;
                     markOutboundGuard(gKey);
-                    sendThrottled(gKey, 45, () => {
+                    sendThrottled(`me:${ev.me}:usk:${ev.usk}:mask`, 45, () => {
+                        markOutboundGuard(gKey);
                         send({
                             cmd: "setUSKMask",
                             me: ev.me,
@@ -1367,7 +1881,8 @@ const AtemBridge = (() => {
                 if (dsk) {
                     const gKey = `dsk:${dsk.id}:cfg`;
                     markOutboundGuard(gKey);
-                    sendThrottled(gKey, 45, () => {
+                    sendThrottled(`dsk:${dsk.id}:gen`, 45, () => {
+                        markOutboundGuard(gKey);
                         send({
                             cmd: "setDSKGeneral",
                             dsk: dsk.id,
@@ -1383,7 +1898,8 @@ const AtemBridge = (() => {
                 if (dsk) {
                     const gKey = `dsk:${dsk.id}:cfg`;
                     markOutboundGuard(gKey);
-                    sendThrottled(gKey, 45, () => {
+                    sendThrottled(`dsk:${dsk.id}:mask`, 45, () => {
+                        markOutboundGuard(gKey);
                         send({
                             cmd: "setDSKMask",
                             dsk: dsk.id,
@@ -1515,9 +2031,43 @@ const AtemBridge = (() => {
                     });
                 }
             } else if (reason === "superSourceAnimFrame" && Number.isInteger(ev?.ss)) {
+                const ssWsNow = state.workspaces.find(w => w.type === "superSource" && w.resourceId === ev.ss);
+                (ssWsNow?.data?.boxes || []).forEach((_, idx) => markOutboundGuard(`ss:${ev.ss}:box:${idx}`));
                 sendThrottled(`ss:${ev.ss}:anim`, 33, () => {
                     const ssWs = state.workspaces.find(w => w.type === "superSource" && w.resourceId === ev.ss);
                     if (!ssWs?.data?.boxes) return;
+                    const prevCache = _lastSentSSBoxes.get(ev.ss) || [];
+                    const nextCache = [];
+                    const changed = [];
+                    ssWs.data.boxes.forEach((box, idx) => {
+                        markOutboundGuard(`ss:${ev.ss}:box:${idx}`);
+                        const payload = {
+                            index: idx,
+                            enabled: !!box.enabled,
+                            source: AtemXml.sourceIdToAtemNumeric(box.source),
+                            x: box.x ?? 0,
+                            y: box.y ?? 0,
+                            size: box.size ?? 0.5,
+                            cropped: !!box.cropEnabled,
+                            cropTop: box.cropTop || 0,
+                            cropBottom: box.cropBottom || 0,
+                            cropLeft: box.cropLeft || 0,
+                            cropRight: box.cropRight || 0
+                        };
+                        const sig = JSON.stringify(payload);
+                        nextCache[idx] = sig;
+                        if (prevCache[idx] !== sig) changed.push(payload);
+                    });
+                    _lastSentSSBoxes.set(ev.ss, nextCache);
+                    if (changed.length > 0) {
+                        send({ cmd: "setSSBoxesBatch", ss: ev.ss, isFinal: false, boxes: changed });
+                    }
+                });
+            } else if (reason === "superSourcePreset" && Number.isInteger(ev?.ss)) {
+                cancelThrottled(`ss:${ev.ss}:anim`);
+                _lastSentSSBoxes.delete(ev.ss);
+                const ssWs = state.workspaces.find(w => w.type === "superSource" && w.resourceId === ev.ss);
+                if (ssWs?.data?.boxes) {
                     const batch = ssWs.data.boxes.map((box, idx) => {
                         markOutboundGuard(`ss:${ev.ss}:box:${idx}`);
                         return {
@@ -1534,28 +2084,7 @@ const AtemBridge = (() => {
                             cropRight: box.cropRight || 0
                         };
                     });
-                    send({ cmd: "setSSBoxesBatch", ss: ev.ss, boxes: batch });
-                });
-            } else if (reason === "superSourcePreset" && Number.isInteger(ev?.ss)) {
-                cancelThrottled(`ss:${ev.ss}:anim`);
-                const ssWs = state.workspaces.find(w => w.type === "superSource" && w.resourceId === ev.ss);
-                if (ssWs?.data?.boxes) {
-                    const batch = ssWs.data.boxes.map((box, idx) => {
-                        markOutboundGuard(`ss:${ev.ss}:box:${idx}`);
-                        return {
-                            index: idx,
-                            enabled: !!box.enabled,
-                            x: box.x ?? 0,
-                            y: box.y ?? 0,
-                            size: box.size ?? 0.5,
-                            cropped: !!box.cropEnabled,
-                            cropTop: box.cropTop || 0,
-                            cropBottom: box.cropBottom || 0,
-                            cropLeft: box.cropLeft || 0,
-                            cropRight: box.cropRight || 0
-                        };
-                    });
-                    send({ cmd: "setSSBoxesBatch", ss: ev.ss, boxes: batch });
+                    send({ cmd: "setSSBoxesBatch", ss: ev.ss, isFinal: true, boxes: batch });
                 }
             } else if (reason === "superSourceArt" && Number.isInteger(ev?.ss)) {
                 const ssWs = state.workspaces.find(w => w.type === "superSource" && w.resourceId === ev.ss);
@@ -1584,8 +2113,73 @@ const AtemBridge = (() => {
                         if (out) send({ cmd: "setAux", aux: a - 1, input: AtemXml.sourceIdToAtemNumeric(out.source) });
                     }
                 }
+            } else if (reason === "streamStart") {
+                send({ cmd: "startStreaming" });
+            } else if (reason === "streamStop") {
+                send({ cmd: "stopStreaming" });
+            } else if (reason === "streamService") {
+                markOutboundGuard("stream:cfg");
+                sendThrottled("stream:cfg", 80, () => {
+                    const st = state.streaming;
+                    if (!st) return;
+                    markOutboundGuard("stream:cfg");
+                    send({
+                        cmd: "setStreamingService",
+                        serviceName: st.serviceName || "",
+                        url: st.url || "",
+                        key: st.key || "",
+                        bitrates: Array.isArray(st.bitrates) ? st.bitrates : [6000000, 9000000],
+                        audioBitrates: st.audioBitrates || { lowBitrate: 128000, highBitrate: 128000 }
+                    });
+                });
+            } else if (reason === "recordStart") {
+                send({ cmd: "startRecording" });
+            } else if (reason === "recordStop") {
+                send({ cmd: "stopRecording" });
+            } else if (reason === "recordSettings") {
+                markOutboundGuard("rec:cfg");
+                sendThrottled("rec:cfg", 80, () => {
+                    const rec = state.recording;
+                    if (!rec) return;
+                    markOutboundGuard("rec:cfg");
+                    send({
+                        cmd: "setRecordingSettings",
+                        filename: rec.filename || "ATEM_Show",
+                        workingSet1DiskId: Number(rec.workingSet1DiskId) || 0,
+                        workingSet2DiskId: Number(rec.workingSet2DiskId) || 0,
+                        recordInAllCameras: !!rec.recordInAllCameras
+                    });
+                });
+            } else if (reason === "recordISO") {
+                markOutboundGuard("rec:cfg");
+                send({ cmd: "setISORecording", enabled: !!(state.recording?.recordAllInputs) });
+            } else if (reason === "recordSwitchDisk") {
+                send({ cmd: "switchRecordingDisk" });
             }
         });
+    }
+
+    function _attachMockTransport(mockWs, { connected = true, liveSync = true, product = "Mock ATEM" } = {}) {
+        clearAllThrottles();
+        _recentOutbound.clear();
+        ws = mockWs;
+        bridgeOpen = true;
+        atemConnected = !!connected;
+        liveSyncEnabled = !!liveSync;
+        atemProduct = product;
+        ensureEngineSubscription();
+    }
+
+    function _detachMockTransport() {
+        clearAllThrottles();
+        _recentOutbound.clear();
+        ws = null;
+        bridgeOpen = false;
+        atemConnected = false;
+        liveSyncEnabled = false;
+        atemProduct = "";
+        hardwareStills = [];
+        hardwareClips = [];
     }
 
     return {
@@ -1594,19 +2188,27 @@ const AtemBridge = (() => {
         disconnect,
         discoverDevices,
         pullFullConfig,
+        pullSelectiveConfig,
         pullHardwareMacros,
         runHardwareMacro,
         stopHardwareMacro,
         applyHardwareSnapshot,
         handleIncomingHardwareMacros,
         pushConfig,
+        pushFullConfig,
+        uploadMediaToAtem,
         setLiveSync,
         captureStillToInput,
+        capturePgmStillToMediaPool,
         pullStillToMediaPool,
+        pullAllStillsToMediaPool,
+        scanInputsViaPgm,
         buildStudioSummary,
         handleIncomingRemoteAction,
         publishStudioStateNow: schedulePublishStudioState,
         getStatus,
-        subscribe
+        subscribe,
+        _attachMockTransport,
+        _detachMockTransport
     };
 })();

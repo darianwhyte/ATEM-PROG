@@ -943,7 +943,7 @@ const ViewCompose = (() => {
                                         <option value="shrink" ${animCfg.offBoxMode === "shrink" ? "selected" : ""}>Off Boxes: Zoom (ATEM)</option>
                                         <option value="slide" ${animCfg.offBoxMode === "slide" ? "selected" : ""}>Off Boxes: Slide (ATEM)</option>
                                         <option value="crop" ${animCfg.offBoxMode === "crop" ? "selected" : ""}>Off Boxes: Crop Wipe (ATEM)</option>
-                                        <option value="fade" ${animCfg.offBoxMode === "fade" ? "selected" : ""}>Off Boxes: Fade (Canvas)</option>
+                                        <option value="fade" ${animCfg.offBoxMode === "fade" ? "selected" : ""}>Off Boxes: Fade (UI preview · Cut on ATEM)</option>
                                         <option value="cut" ${animCfg.offBoxMode === "cut" ? "selected" : ""}>Off Boxes: Cut</option>
                                     </select>
                                 </div>

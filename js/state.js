@@ -68,6 +68,39 @@ function createMEData() {
     };
 }
 
+function createDefaultStreamingState() {
+    return {
+        status: "idle", // "idle" | "connecting" | "streaming" | "stopping"
+        error: "None",
+        serviceName: "YouTube",
+        url: "rtmp://a.rtmp.youtube.com/live2",
+        key: "",
+        quality: "Streaming High",
+        bitrates: [6000000, 9000000],
+        audioBitrates: { lowBitrate: 128000, highBitrate: 128000 },
+        encodingBitrate: 0,
+        cacheUsed: 0,
+        duration: { hours: 0, minutes: 0, seconds: 0, frames: 0 },
+        _hardwareSupported: null
+    };
+}
+
+function createDefaultRecordingState() {
+    return {
+        status: "idle", // "idle" | "recording" | "stopping"
+        error: "None",
+        filename: "ATEM_Show",
+        recordAllInputs: false,
+        recordInAllCameras: false,
+        workingSet1DiskId: 0,
+        workingSet2DiskId: 0,
+        recordingTimeAvailable: 0,
+        duration: { hours: 0, minutes: 0, seconds: 0, frames: 0 },
+        disks: [],
+        _hardwareSupported: null
+    };
+}
+
 let state = {
     projectName: "Untitled Show",
     sources: [],
@@ -88,6 +121,8 @@ let state = {
     busFollowRules: [],
     customSSPresets: [],
     customBusPages: [],
+    streaming: createDefaultStreamingState(),
+    recording: createDefaultRecordingState(),
     resources: {
         dves: []
     },

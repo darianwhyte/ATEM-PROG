@@ -645,6 +645,518 @@ const AtemUiTestSuite = (() => {
                     }
                 }
             ]
+        },
+        {
+            name: "16. UI E2E: ATEM Bridge Full XML/IP Snapshot Sync & Bus Mapping",
+            tests: [
+                {
+                    name: "applyHardwareSnapshot syncs VideoMode, Bus Mapping, Color Generators, Aux Labels, USK/DSK Keying & MultiViewer",
+                    async fn() {
+                        resetFreshProfile("ATEM 2 M/E Constellation HD");
+
+                        AtemBridge.applyHardwareSnapshot({
+                            product: "ATEM 4 M/E Constellation HD",
+                            videoMode: 18, // 2160p50 -> 3840x2160 @ 50fps
+                            colorGenerators: [
+                                { index: 0, hue: 0, saturation: 1000, luma: 500 },   // #ff0000
+                                { index: 1, hue: 2400, saturation: 1000, luma: 500 } // #0000ff
+                            ],
+                            inputs: {
+                                "1": { longName: "Wide Cam", shortName: "WIDE" },
+                                "8001": { longName: "Stage PGM", shortName: "STG" }
+                            },
+                            busFollowRules: [
+                                {
+                                    id: "hw_aux:1:0",
+                                    leadMeIndex: 0,
+                                    targetType: "aux",
+                                    targetIndex: 1,
+                                    enabled: true,
+                                    substitutions: { "6000": "10010", "6001": "10010" },
+                                    _hardwareSynced: true
+                                }
+                            ],
+                            mediaPlayers: [
+                                { index: 0, sourceType: 1, stillIndex: 4, clipIndex: 0 }
+                            ],
+                            mixEffects: [
+                                {
+                                    index: 0,
+                                    programInput: 1,
+                                    previewInput: 2,
+                                    transitionStyle: 2,
+                                    transitionRate: 30,
+                                    ftbRate: 45,
+                                    transitionParams: {
+                                        dipSource: 2002,
+                                        wipePattern: 7,
+                                        wipeReverse: true,
+                                        dveEffect: 27,
+                                        dveReverse: true
+                                    },
+                                    usks: [
+                                        {
+                                            index: 0,
+                                            onAir: true,
+                                            fillSource: 3,
+                                            cutSource: 4,
+                                            keyType: 0,
+                                            flyEnabled: true,
+                                            luma: { preMultiplied: true, clip: 620, gain: 740, invert: true },
+                                            mask: { maskEnabled: true, maskTop: 4500, maskBottom: -4500, maskLeft: -8000, maskRight: 8000 }
+                                        }
+                                    ]
+                                }
+                            ],
+                            downstreamKeyers: [
+                                {
+                                    index: 0,
+                                    onAir: true,
+                                    tie: true,
+                                    rate: 35,
+                                    fillSource: 3010,
+                                    keySource: 3011,
+                                    preMultiply: true,
+                                    clip: 650,
+                                    gain: 800,
+                                    invert: true,
+                                    mask: { enabled: true, top: 4500, bottom: -4500, left: -8000, right: 8000 }
+                                }
+                            ],
+                            multiViewers: [
+                                {
+                                    index: 0,
+                                    layout: 3, // ProgramBottom
+                                    swapPvwPgm: true,
+                                    windows: [
+                                        { index: 0, source: 10011, safeTitle: true, audioMeter: true },
+                                        { index: 1, source: 10010, safeTitle: false, audioMeter: true }
+                                    ]
+                                }
+                            ]
+                        }, { fullPull: true });
+
+                        assertEqual(state.canvas.width, 3840, "VideoMode 18 sets 4K canvas width");
+                        assertEqual(state.canvas.frameRate, 50, "VideoMode 18 sets 50fps");
+                        assertEqual(state.generators.color1, "#ff0000", "Color 1 synced from HSL");
+                        assertEqual(state.generators.color2, "#0000ff", "Color 2 synced from HSL");
+                        assertEqual(getOutputData(1).label, "Stage PGM", "Aux 8001 longName synced");
+                        assertEqual(state.mediaPlayers[0].mediaId, 4, "Media Player 1 still index synced");
+
+                        // Bus Mapping checks
+                        const hwAuxRule = state.busFollowRules.find(r => r.id === "hw_aux:1:0");
+                        assert(!!hwAuxRule && hwAuxRule.enabled === true, "Bus Mapping AUX 1 synced");
+                        assertEqual(hwAuxRule.substitutions.superSource1, "me1", "SS1 -> ME1 PGM substitution mapped");
+                        assertEqual(hwAuxRule.substitutions.superSource2, "me1", "SS2 -> ME1 PGM substitution mapped");
+                        assertEqual(SwitcherEngine.resolveFollowerSource(hwAuxRule, "superSource1"), "me1", "Follower resolves substituted source");
+
+                        // M/E, Transition Params & USK Keying/Mask
+                        const me1 = state.workspaces[0].data;
+                        assertEqual(me1.ftb.rate, 45, "FTB rate synced");
+                        assertEqual(me1.transitionParams.dipSource, "color2", "Dip source synced");
+                        assertEqual(me1.transitionParams.wipePattern, "CircleIris", "Wipe pattern synced");
+                        assertEqual(me1.transitionParams.wipeReverse, true, "Wipe reverse synced");
+                        assertEqual(me1.transitionParams.dveEffect, "PushLeft", "DVE effect synced");
+                        assertEqual(me1.transitionParams.dveReverse, true, "DVE reverse synced");
+
+                        const usk0 = me1.usk[0];
+                        assertEqual(usk0.keyType, "linear", "USK keyType linear inferred from preMultiplied + cutSource");
+                        assertEqual(usk0.flyingKey, true, "USK flyingKey synced");
+                        assertEqual(usk0.keySettings.linear.clip, 62, "USK clip synced");
+                        assertEqual(usk0.keySettings.linear.gain, 74, "USK gain synced");
+                        assertEqual(usk0.keySettings.luma.invert, true, "USK invert synced");
+                        assertEqual(usk0.maskEnabled, true, "USK maskEnabled synced");
+                        assert(usk0.maskTop > 4000 && usk0.maskLeft > 4000, "USK mask coordinates converted cleanly");
+
+                        // DSK Keying & Mask
+                        const dsk0 = getDSK(0);
+                        assertEqual(dsk0.keySettings.linear.premultiplied, true, "DSK premultiplied synced");
+                        assertEqual(dsk0.keySettings.linear.clip, 65, "DSK clip synced");
+                        assertEqual(dsk0.keySettings.linear.gain, 80, "DSK gain synced");
+                        assertEqual(dsk0.keySettings.linear.invert, true, "DSK invert synced");
+                        assertEqual(dsk0.maskEnabled, true, "DSK maskEnabled synced");
+                        assert(dsk0.maskTop > 4000 && dsk0.maskLeft > 4000, "DSK mask coordinates converted cleanly");
+
+                        // MultiViewer
+                        const mv0 = getMultiView(0);
+                        assertEqual(mv0.layout, "ProgramBottom", "MV layout synced");
+                        assertEqual(mv0.swapPvwPgm, true, "MV swap PVW/PGM synced");
+                        assertEqual(mv0.safeArea, true, "MV safe area synced");
+                        assertEqual(mv0.vuMeters, true, "MV VU meters synced");
+                        assertEqual(mv0.windows[0], "me1Preview", "MV Window 1 preserved me1Preview");
+
+                        // Selective Push checkboxes present in Connections -> ATEM Bridge tab
+                        await OverlaysUI.openConnectionsDrawer("bridge");
+                        assert(!!document.getElementById("chkPushColors"), "Selective Push Colors checkbox present");
+                        assert(!!document.getElementById("chkPushDSK"), "Selective Push DSK checkbox present");
+                        OverlaysUI.close();
+                    }
+                },
+                {
+                    name: "Streaming & Recording capabilities, OverlaysUI drawer, Switcher streamRec panel & Undo/Redo config persistence",
+                    fn() {
+                        // 1. Capability gating checks across Mini Pro, Mini Pro ISO, and Constellation
+                        resetFreshProfile("ATEM Mini Pro");
+                        assertEqual(supportsStreamingRecording(), true, "ATEM Mini Pro supports built-in Stream & Record");
+                        assertEqual(supportsISORecording(), false, "ATEM Mini Pro does not support ISO recording");
+
+                        resetFreshProfile("ATEM Mini Pro ISO");
+                        assertEqual(supportsStreamingRecording(), true, "ATEM Mini Pro ISO supports built-in Stream & Record");
+                        assertEqual(supportsISORecording(), true, "ATEM Mini Pro ISO supports ISO recording");
+
+                        resetFreshProfile("ATEM 2 M/E Constellation HD");
+                        assertEqual(supportsStreamingRecording(), false, "Constellation flags offline built-in badge false");
+
+                        // 2. Open Stream & Record Drawer and mutate settings + toggles
+                        resetFreshProfile("ATEM Mini Extreme ISO");
+                        OverlaysUI.openStreamRecDrawer();
+                        const platSel = document.getElementById("selOvrStreamPlatform");
+                        const qualSel = document.getElementById("selOvrStreamQuality");
+                        const fnInp = document.getElementById("inpOvrRecFilename");
+                        const isoChk = document.getElementById("chkOvrRecISO");
+                        assert(!!platSel && !!qualSel && !!fnInp && !!isoChk, "Stream & Record drawer controls rendered");
+
+                        platSel.value = "Twitch";
+                        platSel.dispatchEvent(new Event("change"));
+                        assertEqual(state.streaming.url, "rtmp://live.twitch.tv/app", "Selecting Twitch sets RTMP preset URL");
+
+                        qualSel.value = "HyperDeck High";
+                        qualSel.dispatchEvent(new Event("change"));
+                        assertEqual(state.streaming.bitrates[0], 45000000, "Selecting HyperDeck High sets 45Mbps low bitrate");
+
+                        fnInp.value = "Event_Main";
+                        fnInp.dispatchEvent(new Event("change"));
+                        assertEqual(state.recording.filename, "Event_Main", "Filename updated");
+
+                        isoChk.checked = true;
+                        isoChk.dispatchEvent(new Event("change"));
+                        assertEqual(state.recording.recordAllInputs, true, "ISO recording enabled");
+
+                        HistoryManager.checkpoint();
+                        document.getElementById("btnOvrStreamToggle").click();
+                        document.getElementById("btnOvrRecToggle").click();
+                        assertEqual(state.streaming.status, "streaming", "Drawer toggle started streaming");
+                        assertEqual(state.recording.status, "recording", "Drawer toggle started recording");
+
+                        // Stop cleanly and verify Switcher modular Stream & Record panel
+                        document.getElementById("btnOvrStreamToggle").click();
+                        document.getElementById("btnOvrRecToggle").click();
+                        OverlaysUI.close();
+
+                        const stage = getStage();
+                        ViewSwitcher.render(stage);
+                        stage.querySelector("#btnSwLayout").click();
+                        const srVis = stage.querySelector('[data-vis-blk="streamRec"]');
+                        assert(!!srVis, "Stream & Record checkbox present in Customize Layout");
+                        srVis.checked = true;
+                        srVis.dispatchEvent(new Event("change"));
+
+                        const swStBtn = stage.querySelector("#btnSwStreamToggle");
+                        const swRecBtn = stage.querySelector("#btnSwRecToggle");
+                        assert(!!swStBtn && !!swRecBtn, "Switcher Stream & Record panel buttons rendered");
+                        swStBtn.click();
+                        swRecBtn.click();
+                        assertEqual(state.streaming.status, "streaming", "Switcher panel started stream");
+                        assertEqual(state.recording.status, "recording", "Switcher panel started recording");
+                        SwitcherEngine.stopStreaming();
+                        SwitcherEngine.stopRecording();
+
+                        // 3. History Undo/Redo preserves streaming/recording settings without restoring live active state
+                        SwitcherEngine.setStreamingService({ serviceName: "YouTube" });
+                        SwitcherEngine.setRecordingSettings({ filename: "Tape_Two" });
+                        HistoryManager.checkpoint();
+                        assert(HistoryManager.undo(), "Undo restored prior streaming/recording config");
+                        assertEqual(state.streaming.serviceName, "Twitch", "Undo restored Twitch platform");
+                        assertEqual(state.recording.filename, "Event_Main", "Undo restored filename");
+                        assertEqual(state.streaming.status, "idle", "Undo kept streaming idle");
+                        assertEqual(state.recording.status, "idle", "Undo kept recording idle");
+                    }
+                },
+                {
+                    name: "Standalone Capture drawer merges Ethernet Stills + USB Slicer; Switcher supports per-submodule H/V & compact S scale",
+                    async fn() {
+                        resetFreshProfile("ATEM 2 M/E Constellation HD");
+
+                        // 1. Standalone Capture drawer & Bidirectional Expandable Selective Push/Pull Bridge drawer
+                        await OverlaysUI.openConnectionsDrawer("bridge");
+                        assert(!!document.getElementById("chkPushColors"), "ATEM Bridge drawer shows push checkboxes");
+                        assert(!!document.getElementById("btnDrvPull") && !!document.getElementById("btnDrvPushFull"), "Full Pull and Full Push buttons rendered");
+                        assert(!!document.getElementById("btnDrvPullSelected") && !!document.getElementById("btnDrvPush"), "Selective Pull and Selective Push buttons rendered");
+                        assert(!!document.getElementById("chkPushStills") && !!document.getElementById("chkPushClips"), "Media Pool Stills and Clips selective checkboxes rendered");
+                        assert(!document.getElementById("btnDrvCapThumb"), "Ethernet still grab moved out of Bridge drawer");
+                        assert(!!document.getElementById("btnDrvGoCapture"), "Bridge drawer links cleanly to Capture drawer");
+
+                        document.querySelector('[data-sync-expand="me"]').click();
+                        assert(!!document.querySelector('[data-sync-me="0"]') && !!document.querySelector('[data-sync-me="1"]'), "Expanding M/Es reveals per-M/E checkboxes");
+
+                        await OverlaysUI.openCaptureDrawer();
+                        assert(!!document.getElementById("btnDrvCapThumb"), "Capture drawer includes PGM->Input capture");
+                        assert(!!document.getElementById("btnDrvCapPgmPool"), "Capture drawer includes PGM->Media Pool capture");
+                        assert(!!document.getElementById("btnDrvPullAllStills"), "Capture drawer includes Download All Stills");
+                        assert(!!document.getElementById("btnDrvScanAllInputs"), "Capture drawer includes Scan All Inputs via PGM");
+                        assert(!!document.getElementById("selDrvVideoDev") && !!document.getElementById("btnDrvStartCap"), "Capture drawer includes USB capture controls");
+                        OverlaysUI.close();
+
+                        // 2. Per-submodule H/V arrangement works even while layout is locked
+                        const stage = getStage();
+                        ViewSwitcher.render(stage);
+                        const takeBtn = stage.querySelector('[data-sub-orient-blk="trans"][data-sub-orient-name="take"]');
+                        assert(!!takeBtn, "Inline submodule H/V toggle exists on Take submodule while locked");
+                        assert(stage.querySelector('[data-block-id="trans"] .trans-action-btns.is-row'), "Take defaults to row arrangement");
+                        takeBtn.click();
+                        assert(stage.querySelector('[data-block-id="trans"] .trans-action-btns.is-col'), "Clicking submodule toggle switches Take to vertical column");
+                        stage.querySelector('[data-sub-orient-blk="trans"][data-sub-orient-name="take"]').click();
+                        assert(stage.querySelector('[data-block-id="trans"] .trans-action-btns.is-row'), "Clicking again restores Take to horizontal row");
+
+                        const dskSubBtn = stage.querySelector('[data-sub-orient-blk="dsk"][data-sub-orient-name="dsk_0"]');
+                        assert(!!dskSubBtn, "DSK card exposes inline H/V submodule toggle");
+                        dskSubBtn.click();
+                        assert(stage.querySelector('[data-block-id="dsk"] .dsk-card-btns.is-col'), "DSK card buttons switch to vertical column");
+
+                        // 3. Small (S) panel button scale uses compact abbreviations cleanly
+                        stage.querySelector("#btnSwLock").click();
+                        stage.querySelector('[data-bscale-blk="trans"][data-bscale-val="sm"]').click();
+                        stage.querySelector('[data-bscale-blk="dsk"][data-bscale-val="sm"]').click();
+                        const bkgdText = stage.querySelector('[data-block-id="trans"] [data-nt="bkgd"]').textContent.trim();
+                        const prevText = stage.querySelector('[data-block-id="trans"] [data-sw-prev-trans]').textContent.trim();
+                        const autoText = stage.querySelector('[data-block-id="trans"] [data-sw-auto]').textContent.trim();
+                        const dskAirText = stage.querySelector('[data-block-id="dsk"] [data-dsk-air="0"]').textContent.trim();
+                        assertEqual(bkgdText, "BG", "S scale compacts BKGD -> BG");
+                        assertEqual(prevText, "PRV", "S scale compacts PREV -> PRV");
+                        assertEqual(autoText, "AUT", "S scale compacts AUTO -> AUT");
+                        assertEqual(dskAirText, "AIR", "S scale compacts DSK ON AIR -> AIR");
+
+                        // Restore defaults
+                        stage.querySelector('[data-bscale-blk="trans"][data-bscale-val="md"]').click();
+                        stage.querySelector('[data-bscale-blk="dsk"][data-bscale-val="md"]').click();
+                        stage.querySelector("#btnSwLock").click();
+                    }
+                },
+                {
+                    name: "Switcher supports 1-col & 1-row sizing, universal panel duplication, per-panel element filtering & colored layout regions",
+                    fn() {
+                        resetFreshProfile("ATEM 2 M/E Constellation HD");
+                        const stage = getStage();
+                        ViewSwitcher.render(stage);
+                        stage.querySelector("#btnSwLock").click();
+
+                        // 1. 1-col & 1-row panel support
+                        const col1Btn = stage.querySelector('[data-span-blk="trans"][data-span-val="1"]');
+                        assert(!!col1Btn, "1c (1 column) preset button rendered in Switcher header");
+                        col1Btn.click();
+                        assert(stage.querySelector('[data-block-id="trans"].sw-col-1'), "trans shrinks to 1-column class sw-col-1");
+
+                        const savedRaw = JSON.parse(localStorage.getItem("atem_prog_switcher_layout_v5"));
+                        savedRaw.rects.trans.rowSpan = 1;
+                        localStorage.setItem("atem_prog_switcher_layout_v5", JSON.stringify(savedRaw));
+                        ViewSwitcher.reloadFromStorage();
+                        ViewSwitcher.render(stage);
+                        assert(stage.querySelector('[data-block-id="trans"].sw-row-1'), "trans persists and renders 1-row class sw-row-1");
+
+                        // 2. Universal panel duplication (DSK + Stream & Record)
+                        stage.querySelector('[data-dup-blk="dsk"]').click();
+                        assert(!!stage.querySelector('[data-block-id="dsk"]') && !!stage.querySelector('[data-block-id="dsk_2"]'), "Duplicate DSK panel (dsk_2) rendered alongside original dsk");
+
+                        // 3. Per-panel element filtering (hide DSK 1 only in dsk_2)
+                        stage.querySelector('[data-filter-blk="dsk_2"]').click();
+                        const dsk0Chk = stage.querySelector('[data-item-flt-blk="dsk_2"][data-item-flt-id="dsk_0"]');
+                        assert(!!dsk0Chk, "Per-panel item filter pill rendered for dsk_2");
+                        dsk0Chk.checked = false;
+                        dsk0Chk.dispatchEvent(new Event("change"));
+                        assert(!stage.querySelector('[data-block-id="dsk_2"] [data-dsk-air="0"]'), "DSK 1 hidden in filtered dsk_2 panel");
+                        assert(!!stage.querySelector('[data-block-id="dsk_2"] [data-dsk-air="1"]'), "DSK 2 still visible in dsk_2 panel");
+                        assert(!!stage.querySelector('[data-block-id="dsk"] [data-dsk-air="0"]'), "Original dsk panel still shows DSK 1 independently");
+
+                        // Filter Quick Sources panel (hide USK 1; Constellation HD gates out Stream & Record)
+                        stage.querySelector("#btnSwLayout").click();
+                        const srcVis = stage.querySelector('[data-vis-blk="sources"]');
+                        srcVis.checked = true;
+                        srcVis.dispatchEvent(new Event("change"));
+                        assert(!stage.querySelector('[data-vis-blk="streamRec"]'), "Stream & Record option gated off on ATEM 2 M/E Constellation HD");
+
+                        stage.querySelector('[data-filter-blk="sources"]').click();
+                        const u0Chk = stage.querySelector('[data-item-flt-blk="sources"][data-item-flt-id="usk_0"]');
+                        u0Chk.checked = false;
+                        u0Chk.dispatchEvent(new Event("change"));
+                        assert(!stage.querySelector('[data-block-id="sources"] [data-q-usk-air="0"]'), "Quick Sources panel hid USK 1");
+
+                        // 4. Colored background layout regions (title, color, lock & delete)
+                        stage.querySelector("#btnSwAddRegion").click();
+                        const regEl = stage.querySelector(".sw-region");
+                        assert(!!regEl, "Colored region created underneath panels");
+                        const titleInp = regEl.querySelector("[data-reg-title]");
+                        const colorInp = regEl.querySelector("[data-reg-color]");
+                        titleInp.value = "Cameras & Keyers";
+                        titleInp.dispatchEvent(new Event("input"));
+                        colorInp.value = "#ef4444";
+                        colorInp.dispatchEvent(new Event("input"));
+                        colorInp.dispatchEvent(new Event("change"));
+
+                        // Lock and verify clean region title badge + border/tint remain intact
+                        stage.querySelector("#btnSwLock").click();
+                        const lockedReg = stage.querySelector(".sw-region.is-locked");
+                        assert(!!lockedReg && lockedReg.textContent.includes("Cameras & Keyers"), "Locked region shows updated title");
+
+                        // Unlock, reactivate floating region title & delete region
+                        stage.querySelector("#btnSwLock").click();
+                        stage.querySelector("[data-reg-activate]").click();
+                        stage.querySelector("[data-reg-del]").click();
+                        assertEqual(stage.querySelectorAll(".sw-region").length, 0, "Deleted region removed cleanly");
+                    }
+                },
+                {
+                    name: "Streaming/Recording capability gating, compact panel overflow menu, Layout Lock & Show/Edit Mode",
+                    async fn() {
+                        resetFreshProfile("ATEM 2 M/E Constellation HD");
+                        assert(!isStreamingRecordingAvailable(), "Constellation HD does not report built-in Streaming/Recording");
+                        state.streaming._hardwareSupported = true;
+                        assert(isStreamingRecordingAvailable(), "Hardware capability flag enables Streaming/Recording availability");
+                        state.streaming._hardwareSupported = false;
+
+                        resetFreshProfile("ATEM Mini Extreme ISO");
+                        assert(isStreamingRecordingAvailable(), "ATEM Mini Extreme ISO reports built-in Streaming/Recording");
+                        const stage = getStage();
+                        ViewSwitcher.render(stage);
+
+                        // Verify Stream & Record is present in Customize Layout and can be enabled + duplicated
+                        stage.querySelector("#btnSwLock").click();
+                        stage.querySelector("#btnSwLayout").click();
+                        const srVis = stage.querySelector('[data-vis-blk="streamRec"]');
+                        assert(!!srVis, "Stream & Record option available in Customize Layout on Mini Extreme ISO");
+                        srVis.checked = true;
+                        srVis.dispatchEvent(new Event("change"));
+                        stage.querySelector('[data-dup-blk="streamRec"]').click();
+                        assert(!!stage.querySelector('[data-block-id="streamRec_2"] [data-sw-stream-toggle]'), "Duplicate Stream & Record panel (streamRec_2) rendered");
+                        stage.querySelector("#btnSwLayout").click();
+
+                        // 1. Compact panel overflow menu when narrow (1 col)
+                        stage.querySelector('[data-span-blk="trans"][data-span-val="1"]').click();
+                        const transMenuBtn = stage.querySelector('[data-blk-menu="trans"]');
+                        assert(!!transMenuBtn, "Compact panel renders clickable overflow menu button instead of overflowing header");
+                        transMenuBtn.click();
+                        const popRestoreFull = stage.querySelector('[data-block-id="trans"] .sw-blk-menu-pop [data-span-blk="trans"][data-span-val="24"]');
+                        assert(!!popRestoreFull, "Overflow menu popover opens with width controls");
+                        popRestoreFull.click();
+                        assert(!stage.querySelector('[data-block-id="trans"].sw-col-1'), "Clicking width inside overflow menu restores panel width");
+
+                        // 2. Grid Lock vs Layout Lock labels and control hiding
+                        const gridBtn = stage.querySelector("#btnSwLock");
+                        const layoutLockBtn = stage.querySelector("#btnSwLayoutLock");
+                        assert(gridBtn.textContent.includes("Grid Unlocked") && layoutLockBtn.textContent.includes("Layout Unlocked"), "Grid & Layout lock buttons display explicit Unlocked states");
+                        assert(!!stage.querySelector('[data-sub-orient-blk]') && !!stage.querySelector('[data-add-bus-page]'), "Sub-orientation and bus page controls visible when Layout Unlocked");
+
+                        layoutLockBtn.click();
+                        assert(stage.querySelector("#btnSwLayoutLock").textContent.includes("Layout Locked"), "Layout lock button updates to Layout Locked");
+                        assert(!stage.querySelector('[data-sub-orient-blk]') && !stage.querySelector('[data-add-bus-page]'), "Layout Locked hides panel arrangement and page-edit controls");
+                        assert(!!stage.querySelector("#btnSwLock") && !!stage.querySelector("#btnSwLayout"), "Grid Lock and Customise Layout remain visible while Layout Locked");
+
+                        // 3. Superlevel Show / Edit Mode
+                        const showBtn = stage.querySelector("#btnSwModeShow");
+                        const editBtn = stage.querySelector("#btnSwModeEdit");
+                        assert(!!showBtn && !!editBtn, "Show / Edit mode buttons rendered");
+                        showBtn.click();
+                        assert(!stage.querySelector("#btnSwLock") && !stage.querySelector("#btnSwLayoutLock") && !stage.querySelector("#btnSwLayout") && !stage.querySelector("#btnSwAddRegion"), "Show mode hides Grid Lock, Layout Lock, Add Region, and Customise Layout");
+                        assert(!!stage.querySelector('[data-block-id="trans"] [data-sw-cut]'), "Live switcher controls remain operational in Show mode");
+
+                        stage.querySelector("#btnSwModeEdit").click();
+                        assert(!!stage.querySelector("#btnSwLock") && !!stage.querySelector("#btnSwLayoutLock") && !!stage.querySelector("#btnSwLayout"), "Edit mode restores Grid Lock, Layout Lock, and Customise Layout controls");
+                    }
+                },
+                {
+                    name: "24-col grid with min-span clamping, legacy 12-col migration, active-only Regions with push-down, and USK / Media Players / SS Boxes panels",
+                    fn() {
+                        resetFreshProfile("ATEM 2 M/E Constellation HD");
+
+                        // 1. Legacy 12-col layout migration -> 24-col coordinates
+                        const legacyLayout = {
+                            locked: false,
+                            visible: { monitors: true, bus: true, trans: true, dsk: true },
+                            rects: {
+                                monitors: { col: 1, row: 1, span: 12, rowSpan: 6 },
+                                bus: { col: 1, row: 7, span: 12, rowSpan: 3 },
+                                trans: { col: 1, row: 10, span: 8, rowSpan: 3 },
+                                dsk: { col: 9, row: 10, span: 4, rowSpan: 3 }
+                            }
+                        };
+                        localStorage.setItem("atem_prog_switcher_layout_v5", JSON.stringify(legacyLayout));
+                        ViewSwitcher.reloadFromStorage();
+                        const stage = getStage();
+                        ViewSwitcher.render(stage);
+                        const dskBlk = stage.querySelector('[data-block-id="dsk"]');
+                        assert(dskBlk.style.gridColumn.includes("17") && dskBlk.style.gridColumn.includes("span 8"), "Legacy 12-col DSK rect (col 9, span 4) migrates to 24-col (col 17, span 8)");
+
+                        // 2. 24-col micro width & per-type min-span clamping
+                        assert(!stage.querySelector('[data-span-blk="monitors"][data-span-val="1"]') && !stage.querySelector('[data-span-blk="monitors"][data-span-val="2"]'), "Monitors clamp minimum width above 1c/2c");
+                        assert(!!stage.querySelector('[data-span-blk="monitors"][data-span-val="4"]'), "Monitors expose clamped 4c minimum preset");
+                        stage.querySelector('[data-span-blk="trans"][data-span-val="1"]').click();
+                        assert(!!stage.querySelector('[data-block-id="trans"].sw-col-micro.sw-col-1'), "Transition panel shrinks down to micro 1/24 column width");
+
+                        // 3. Active-only Region controls & top-row panel push-down
+                        stage.querySelector("#btnSwAddRegion").click();
+                        assert(!!stage.querySelector(".sw-region.is-active [data-reg-title]") && !!stage.querySelector(".sw-region.is-active [data-reg-color]") && !!stage.querySelector(".sw-region.is-active [data-reg-del]"), "Newly added region opens active with title, color, and delete controls");
+                        assert(!!stage.querySelector('[data-block-id="monitors"].sw-under-reg-head'), "Top-row panel overlapping region gets sw-under-reg-head push-down class");
+
+                        // Click away -> passive floating title badge only
+                        stage.querySelector(".subbar").click();
+                        assert(!stage.querySelector("[data-reg-title]") && !!stage.querySelector("[data-reg-activate]"), "Clicking away switches region to passive floating title");
+
+                        // Click floating title while unlocked -> reactivates edit controls
+                        stage.querySelector("[data-reg-activate]").click();
+                        assert(!!stage.querySelector(".sw-region.is-active [data-reg-title]"), "Clicking floating title while unlocked reactivates region editing");
+
+                        // Locking grid hides region edit controls while keeping title visible
+                        stage.querySelector("#btnSwLock").click();
+                        assert(!stage.querySelector("[data-reg-title]") && stage.querySelector(".sw-region.is-locked").textContent.includes("Region 1"), "Grid Lock hides region edit controls while preserving title");
+                        stage.querySelector("#btnSwLock").click();
+
+                        // 4. Seed Still + Clip in Media Pool and enable USK, Media Players, SS Boxes panels
+                        state.media = [
+                            { id: 0, name: "Show Bug", kind: "image", w: 1920, h: 1080, url: "" },
+                            { id: 1, name: "Intro Stinger", kind: "video", w: 1920, h: 1080, url: "", playing: false, loop: true }
+                        ];
+                        stage.querySelector("#btnSwLayout").click();
+                        ["usk", "mediaPlayers", "ssBoxes"].forEach(k => {
+                            const chk = stage.querySelector(`[data-vis-blk="${k}"]`);
+                            assert(!!chk, `Customize Layout includes ${k} panel toggle`);
+                            chk.checked = true;
+                            chk.dispatchEvent(new Event("change"));
+                        });
+                        stage.querySelector("#btnSwLayout").click();
+
+                        // USK panel controls
+                        stage.querySelector('[data-block-id="usk"] [data-usk-air="0"]').click();
+                        stage.querySelector('[data-block-id="usk"] [data-usk-next="0"]').click();
+                        const uskSrcSel = stage.querySelector('[data-block-id="usk"] [data-usk-src="0"]');
+                        uskSrcSel.value = "input2";
+                        uskSrcSel.dispatchEvent(new Event("change"));
+                        const me0 = state.workspaces.find(w => w.type === "me" && w.resourceId === 0);
+                        assertEqual(me0.data.usk[0].enabled, true, "USK panel toggles Key 1 On Air");
+                        assertEqual(me0.data.nextTransition.usk[0], true, "USK panel toggles Key 1 in Next Transition");
+                        assertEqual(me0.data.usk[0].source, "input2", "USK panel updates Key 1 fill source");
+
+                        // Media Players panel: wide preview + clip selection + transport + narrow preview hide
+                        assert(!!stage.querySelector('[data-block-id="mediaPlayers"] [data-sw-mp-canvas="0"]'), "Wide Media Players panel renders preview canvas");
+                        const mpSel = stage.querySelector('[data-block-id="mediaPlayers"] [data-sw-mp-sel="0"]');
+                        mpSel.value = "1";
+                        mpSel.dispatchEvent(new Event("change"));
+                        assertEqual(state.mediaPlayers[0].mediaId, 1, "Media Players panel assigns Clip #2 to MP 1");
+                        stage.querySelector('[data-block-id="mediaPlayers"] [data-sw-mp-play="1"]').click();
+                        assertEqual(state.media[1].playing, true, "Media Players transport toggles clip playback");
+                        stage.querySelector('[data-block-id="mediaPlayers"] [data-sw-mp-loop="1"]').click();
+                        assertEqual(state.media[1].loop, false, "Media Players transport toggles clip loop flag");
+
+                        stage.querySelector('[data-span-blk="mediaPlayers"][data-span-val="2"]').click();
+                        assert(!stage.querySelector('[data-block-id="mediaPlayers"] [data-sw-mp-canvas="0"]'), "Narrow 2c Media Players panel hides preview canvas while keeping selector");
+                        assert(!!stage.querySelector('[data-block-id="mediaPlayers"] [data-sw-mp-sel="0"]'), "Narrow 2c Media Players panel keeps slot selector accessible");
+
+                        // SuperSource Boxes panel
+                        const ss0 = state.workspaces.find(w => w.type === "superSource" && w.resourceId === 0);
+                        const prevBox0 = !!ss0.data.boxes[0].enabled;
+                        stage.querySelector('[data-block-id="ssBoxes"] [data-q-box-en="0"]').click();
+                        assertEqual(!!ss0.data.boxes[0].enabled, !prevBox0, "SuperSource Boxes panel toggles Box 1 enabled state");
+                    }
+                }
+            ]
         }
     ];
 

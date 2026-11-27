@@ -603,7 +603,7 @@ const StateStorage = (() => {
 
     function init() {
         if (typeof SwitcherEngine !== "undefined") {
-            const SKIP_SAVE_REASONS = new Set(["transitionAutoFrame", "dskAutoFrame", "transitionAutoStart", "dskAutoStart", "ftbStart", "superSourceAnimFrame"]);
+            const SKIP_SAVE_REASONS = new Set(["transitionAutoFrame", "transitionPosition", "dskAutoFrame", "transitionAutoStart", "dskAutoStart", "ftbStart", "superSourceAnimFrame", "streamTick", "recordTick"]);
             SwitcherEngine.subscribe(({ reason }) => {
                 if (SKIP_SAVE_REASONS.has(reason)) return;
                 scheduleSave();

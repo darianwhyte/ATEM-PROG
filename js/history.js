@@ -13,10 +13,17 @@ const HistoryManager = (() => {
     const IGNORED_REASONS = new Set([
         "transitionAutoFrame",
         "transitionAutoStart",
+        "transitionPosition",
         "dskAutoFrame",
         "dskAutoStart",
         "ftbStart",
         "superSourceAnimFrame",
+        "streamTick",
+        "recordTick",
+        "streamStart",
+        "streamStop",
+        "recordStart",
+        "recordStop",
         "historyRestore",
         "storageRestore",
         "workspace",
@@ -121,6 +128,21 @@ const HistoryManager = (() => {
             busFollowRules: Array.isArray(state.busFollowRules) ? state.busFollowRules : [],
             customSSPresets: Array.isArray(state.customSSPresets) ? state.customSSPresets : [],
             customBusPages: Array.isArray(state.customBusPages) ? state.customBusPages : [],
+            streaming: state.streaming ? {
+                serviceName: state.streaming.serviceName || "YouTube",
+                url: state.streaming.url || "",
+                key: state.streaming.key || "",
+                quality: state.streaming.quality || "Streaming High",
+                bitrates: Array.isArray(state.streaming.bitrates) ? [...state.streaming.bitrates] : [6000000, 9000000],
+                audioBitrates: state.streaming.audioBitrates ? { ...state.streaming.audioBitrates } : { lowBitrate: 128000, highBitrate: 128000 }
+            } : null,
+            recording: state.recording ? {
+                filename: state.recording.filename || "ATEM_Show",
+                recordAllInputs: !!state.recording.recordAllInputs,
+                recordInAllCameras: !!state.recording.recordInAllCameras,
+                workingSet1DiskId: Number(state.recording.workingSet1DiskId) || 0,
+                workingSet2DiskId: Number(state.recording.workingSet2DiskId) || 0
+            } : null,
             studioMode: !!state.studioMode,
             editLiveProgram: !!state.editLiveProgram
         };
@@ -251,6 +273,14 @@ const HistoryManager = (() => {
         state.busFollowRules = Array.isArray(snap.busFollowRules) ? snap.busFollowRules : [];
         state.customSSPresets = Array.isArray(snap.customSSPresets) ? snap.customSSPresets : [];
         state.customBusPages = Array.isArray(snap.customBusPages) ? snap.customBusPages : [];
+        if (snap.streaming) {
+            const curS = state.streaming || (typeof createDefaultStreamingState === "function" ? createDefaultStreamingState() : {});
+            state.streaming = { ...curS, ...snap.streaming };
+        }
+        if (snap.recording) {
+            const curR = state.recording || (typeof createDefaultRecordingState === "function" ? createDefaultRecordingState() : {});
+            state.recording = { ...curR, ...snap.recording };
+        }
         state.studioMode = !!snap.studioMode;
         state.editLiveProgram = !!snap.editLiveProgram;
 

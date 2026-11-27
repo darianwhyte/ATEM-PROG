@@ -175,6 +175,7 @@
 <script src="js/ui/view-media.js"></script>
 <script src="tests/engine.test.js"></script>
 <script src="tests/ui.test.js"></script>
+<script src="tests/sync.test.js"></script>
 
 <script>
     async function executeTests() {
@@ -188,13 +189,16 @@
         try {
             const engReport = await AtemTestSuite.runAll();
             const uiReport = await AtemUiTestSuite.runAll();
+            const syncReport = typeof AtemSyncTestSuite !== "undefined"
+                ? await AtemSyncTestSuite.runAll()
+                : { results: [], passed: 0, failed: 0, skipped: 0, total: 0 };
 
             const report = {
-                results: [...engReport.results, ...uiReport.results],
-                passed: engReport.passed + uiReport.passed,
-                failed: engReport.failed + uiReport.failed,
-                skipped: engReport.skipped + uiReport.skipped,
-                total: engReport.total + uiReport.total
+                results: [...engReport.results, ...uiReport.results, ...syncReport.results],
+                passed: engReport.passed + uiReport.passed + syncReport.passed,
+                failed: engReport.failed + uiReport.failed + syncReport.failed,
+                skipped: engReport.skipped + uiReport.skipped + syncReport.skipped,
+                total: engReport.total + uiReport.total + syncReport.total
             };
             window.__ATEM_TEST_REPORT__ = report;
 

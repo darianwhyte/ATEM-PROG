@@ -118,15 +118,9 @@ const AppUI = (() => {
 
         const bridgeSt = typeof AtemBridge !== "undefined" ? AtemBridge.getStatus() : {};
         const capSt = typeof LiveVideoManager !== "undefined" ? LiveVideoManager.getStatus() : {};
-        const ioLive = !!(bridgeSt.atemConnected || capSt.active);
+        const ioLive = !!bridgeSt.atemConnected;
         const ioDotClass = ioLive ? "online" : (bridgeSt.bridgeOpen ? "warn" : "");
-        const ioText = bridgeSt.atemConnected && capSt.active
-            ? "ATEM + Video"
-            : bridgeSt.atemConnected
-                ? "ATEM Live"
-                : capSt.active
-                    ? "USB Video"
-                    : "Live I/O";
+        const ioText = bridgeSt.atemConnected ? "ATEM Live" : "ATEM Bridge";
 
         const canUndo = typeof HistoryManager !== "undefined" && HistoryManager.canUndo();
         const canRedo = typeof HistoryManager !== "undefined" && HistoryManager.canRedo();
@@ -141,6 +135,17 @@ const AppUI = (() => {
             { id: "macros", label: "Macros" },
             { id: "media", label: "Media" }
         ];
+
+        const st = state.streaming || {};
+        const rec = state.recording || {};
+        const stOn = st.status === "streaming" || st.status === "connecting";
+        const recOn = rec.status === "recording";
+        const stTime = typeof SwitcherEngine !== "undefined" && typeof SwitcherEngine.formatTimecode === "function" ? SwitcherEngine.formatTimecode(st.duration) : "00:00:00";
+        const recTime = typeof SwitcherEngine !== "undefined" && typeof SwitcherEngine.formatTimecode === "function" ? SwitcherEngine.formatTimecode(rec.duration) : "00:00:00";
+        const srText = stOn && recOn ? "AIR + REC" : stOn ? `ON AIR ${stTime}` : recOn ? `REC ${recTime}` : "Stream / Rec";
+        const hasStreamRec = typeof isStreamingRecordingAvailable === "function"
+            ? isStreamingRecordingAvailable()
+            : (typeof supportsStreamingRecording === "function" && supportsStreamingRecording());
 
         header.innerHTML = `
             <div class="topbar-left">
@@ -165,10 +170,20 @@ const AppUI = (() => {
                     <span>${esc(state.projectName || "Untitled Show")}</span>
                     <span class="pill-meta">${esc(getShortProfileLabel())} · ${esc(getVideoShortTag())}</span>
                 </button>
-                <button class="pill-btn ${ioLive ? "active" : ""}" id="btnHdrLiveIO" title="ATEM Ethernet Bridge & USB Capture / Multi-View Slicer">
+                <button class="pill-btn ${ioLive ? "active" : ""}" id="btnHdrLiveIO" title="ATEM Ethernet Bridge — Live Hardware Sync, Pull & Push">
                     <span class="status-dot ${ioDotClass}"></span>
                     <span>${esc(ioText)}</span>
                 </button>
+                <button class="pill-btn ${capSt.active ? "active" : ""}" id="btnHdrCapture" title="Capture — USB Live Video, Multi-View Slicer & ATEM Ethernet Stills">
+                    <span class="status-dot ${capSt.active ? "online" : ""}"></span>
+                    <span>${capSt.active ? "Capture Live" : "Capture"}</span>
+                </button>
+                ${hasStreamRec ? `
+                    <button class="pill-btn ${(stOn || recOn) ? "active" : ""}" id="btnHdrStreamRec" title="Live Streaming & Disk Recording Control">
+                        <span class="status-dot ${(stOn || recOn) ? "rec" : ""}"></span>
+                        <span id="hdrStreamRecTxt">${esc(srText)}</span>
+                    </button>
+                ` : ""}
                 <button class="btn btn-sm" id="btnHdrTheme" title="Cycle Theme: Dark / Light / High Contrast">
                     ${activeTheme === "dark" ? "🌙 Dark" : activeTheme === "light" ? "☀ Light" : "◐ Contrast"}
                 </button>
@@ -185,7 +200,9 @@ const AppUI = (() => {
             btn.addEventListener("click", () => navigate(btn.dataset.nav));
         });
         header.querySelector("#btnHdrProject")?.addEventListener("click", () => OverlaysUI.openProjectModal());
-        header.querySelector("#btnHdrLiveIO")?.addEventListener("click", () => OverlaysUI.openConnectionsDrawer());
+        header.querySelector("#btnHdrLiveIO")?.addEventListener("click", () => OverlaysUI.openConnectionsDrawer("bridge"));
+        header.querySelector("#btnHdrCapture")?.addEventListener("click", () => OverlaysUI.openCaptureDrawer());
+        header.querySelector("#btnHdrStreamRec")?.addEventListener("click", () => OverlaysUI.openStreamRecDrawer());
         header.querySelector("#btnHdrTheme")?.addEventListener("click", cycleTheme);
         header.querySelector("#btnHdrPopoutMV")?.addEventListener("click", () => {
             if (typeof PopoutManager !== "undefined") PopoutManager.openMultiview(0);
@@ -290,6 +307,29 @@ const AppUI = (() => {
         if (typeof PopoutManager !== "undefined" && PopoutManager.hasOpenPopouts()) {
             PopoutManager.renderPopouts();
         }
+        // Lightweight live tick updates for Stream & Record timecodes without rebuilding DOM
+        if (typeof SwitcherEngine !== "undefined" && typeof SwitcherEngine.formatTimecode === "function") {
+            const st = state.streaming || {};
+            const rec = state.recording || {};
+            const stTime = SwitcherEngine.formatTimecode(st.duration);
+            const recTime = SwitcherEngine.formatTimecode(rec.duration);
+            const stOn = st.status === "streaming" || st.status === "connecting";
+            const recOn = rec.status === "recording";
+            const hdrTxt = document.getElementById("hdrStreamRecTxt");
+            if (hdrTxt) {
+                hdrTxt.textContent = stOn && recOn ? `AIR + REC` : stOn ? `ON AIR ${stTime}` : recOn ? `REC ${recTime}` : "Stream / Rec";
+            }
+            const swSt = document.getElementById("swStreamTime");
+            if (swSt) swSt.textContent = stTime;
+            document.querySelectorAll("[data-sw-stream-time]").forEach(el => { el.textContent = stTime; });
+            const swRec = document.getElementById("swRecTime");
+            if (swRec) swRec.textContent = recTime;
+            document.querySelectorAll("[data-sw-rec-time]").forEach(el => { el.textContent = recTime; });
+            const ovrSt = document.getElementById("ovrStreamTime");
+            if (ovrSt) ovrSt.textContent = stTime;
+            const ovrRec = document.getElementById("ovrRecTime");
+            if (ovrRec) ovrRec.textContent = recTime;
+        }
     }
 
     function renderMacroPreview() {
@@ -313,11 +353,12 @@ const AppUI = (() => {
     const FAST_TICK_REASONS = new Set([
         "transitionAutoFrame", "transitionAutoStart", "dskAutoFrame", "dskAutoStart",
         "ftbFrame", "ftbStart", "flyKeyFrame", "superSourceAnimFrame",
-        "transitionPosition", "layerPos", "layerSize", "layerCrop", "layerMask",
+        "bridgeTransitionFrame", "transitionPosition", "layerPos", "layerSize", "layerCrop", "layerMask",
         "lumaClip", "lumaGain", "linearClip", "linearGain",
         "chromaColor", "chromaCorrection", "chromaSpill",
         "patternSize", "patternSoftness", "borderWidth", "borderColor",
-        "superSourceArt", "dskClip", "dskGain", "dskMask", "generatorColor"
+        "superSourceArt", "dskClip", "dskGain", "dskMask", "generatorColor",
+        "streamTick", "recordTick"
     ]);
 
     function refresh(reason = "state") {

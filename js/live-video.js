@@ -206,6 +206,51 @@ const LiveVideoManager = (() => {
         return captured.size;
     }
 
+    function snapFrameToMediaPool(label = "") {
+        if (!mediaStream || !videoEl || videoEl.readyState < 2 || !videoEl.videoWidth) {
+            return { ok: false, error: "USB video capture is not active." };
+        }
+        const w = videoEl.videoWidth || state.canvas?.width || 1920;
+        const h = videoEl.videoHeight || state.canvas?.height || 1080;
+        const snapCanvas = document.createElement("canvas");
+        snapCanvas.width = w;
+        snapCanvas.height = h;
+        snapCanvas.getContext("2d").drawImage(videoEl, 0, 0, w, h);
+
+        const dataUrl = snapCanvas.toDataURL("image/png");
+        const usedIds = new Set((state.media || []).map(m => m.id));
+        let nextSlot = 0;
+        while (usedIds.has(nextSlot)) nextSlot++;
+
+        const defaultName = mode === "multiview"
+            ? `MV_${sourceMvIndex + 1}_Frame_${nextSlot + 1}.png`
+            : `Input_${singleInputCh}_Frame_${nextSlot + 1}.png`;
+        const name = (label && String(label).trim()) || defaultName;
+        const mediaItem = {
+            id: nextSlot,
+            name,
+            url: dataUrl,
+            nativeWidth: w,
+            nativeHeight: h,
+            scaleX: w / (state.canvas?.width || 1920),
+            scaleY: h / (state.canvas?.height || 1080)
+        };
+        state.media ??= [];
+        state.media.push(mediaItem);
+        state.media.sort((a, b) => a.id - b.id);
+
+        if (typeof StateStorage !== "undefined") {
+            snapCanvas.toBlob((blob) => {
+                if (blob) StateStorage.saveMediaAsset(mediaItem, blob);
+                StateStorage.scheduleSave();
+            }, "image/png");
+        }
+        if (typeof AppUI !== "undefined" && AppUI.refresh) AppUI.refresh("mediaPool");
+        else if (typeof updateUI === "function") updateUI(true);
+
+        return { ok: true, slot: nextSlot, name };
+    }
+
     function tickLoop(ts) {
         if (!mediaStream) {
             rafId = null;
@@ -296,6 +341,7 @@ const LiveVideoManager = (() => {
         drawInputToCanvas,
         captureSnapshotForInput,
         snapAllFromMultiView,
+        snapFrameToMediaPool,
         subscribe,
         getStatus,
         get isActive() { return !!mediaStream; }

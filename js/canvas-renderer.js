@@ -1280,13 +1280,63 @@ const CanvasRenderer = (() => {
                     } else if (pattern === "VerticalBarnDoor") {
                         const rh = h * prog;
                         ctx.rect(0, (h - rh) / 2, w, rh);
+                    } else if (pattern === "CornersInFourBox") {
+                        const bw = (w / 2) * prog;
+                        const bh = (h / 2) * prog;
+                        ctx.rect(0, 0, bw, bh);
+                        ctx.rect(w - bw, 0, bw, bh);
+                        ctx.rect(0, h - bh, bw, bh);
+                        ctx.rect(w - bw, h - bh, bw, bh);
                     } else if (pattern === "RectangleIris") {
                         const rw = w * prog;
                         const rh = h * prog;
                         ctx.rect((w - rw) / 2, (h - rh) / 2, rw, rh);
+                    } else if (pattern === "DiamondIris") {
+                        const rx = w * prog;
+                        const ry = h * prog;
+                        ctx.moveTo(w / 2, h / 2 - ry);
+                        ctx.lineTo(w / 2 + rx, h / 2);
+                        ctx.lineTo(w / 2, h / 2 + ry);
+                        ctx.lineTo(w / 2 - rx, h / 2);
+                        ctx.closePath();
                     } else if (pattern === "CircleIris") {
                         const maxR = Math.hypot(w / 2, h / 2);
                         ctx.arc(w / 2, h / 2, maxR * prog, 0, Math.PI * 2);
+                    } else if (pattern === "TopLeftBox") {
+                        ctx.rect(0, 0, w * prog, h * prog);
+                    } else if (pattern === "TopRightBox") {
+                        const bw = w * prog;
+                        ctx.rect(w - bw, 0, bw, h * prog);
+                    } else if (pattern === "BottomRightBox") {
+                        const bw = w * prog, bh = h * prog;
+                        ctx.rect(w - bw, h - bh, bw, bh);
+                    } else if (pattern === "BottomLeftBox") {
+                        const bh = h * prog;
+                        ctx.rect(0, h - bh, w * prog, bh);
+                    } else if (pattern === "TopCentreBox") {
+                        const bw = w * prog;
+                        ctx.rect((w - bw) / 2, 0, bw, h * prog);
+                    } else if (pattern === "RightCentreBox") {
+                        const bw = w * prog, bh = h * prog;
+                        ctx.rect(w - bw, (h - bh) / 2, bw, bh);
+                    } else if (pattern === "BottomCentreBox") {
+                        const bw = w * prog, bh = h * prog;
+                        ctx.rect((w - bw) / 2, h - bh, bw, bh);
+                    } else if (pattern === "LeftCentreBox") {
+                        const bh = h * prog;
+                        ctx.rect(0, (h - bh) / 2, w * prog, bh);
+                    } else if (pattern === "TopLeftDiagonal") {
+                        const d = (w + h) * prog;
+                        ctx.moveTo(0, 0);
+                        ctx.lineTo(d, 0);
+                        ctx.lineTo(0, d);
+                        ctx.closePath();
+                    } else if (pattern === "TopRightDiagonal") {
+                        const d = (w + h) * prog;
+                        ctx.moveTo(w, 0);
+                        ctx.lineTo(w, d);
+                        ctx.lineTo(w - d, 0);
+                        ctx.closePath();
                     } else {
                         ctx.rect(0, 0, Math.round(w * prog), h);
                     }
@@ -1296,34 +1346,52 @@ const CanvasRenderer = (() => {
                 break;
             }
             case "DVE": {
-                const effect = params?.dveEffect || "PushRight";
+                const rawEff = params?.dveEffect || "PushRight";
+                const effAlias = { PushUp: "PushTop", PushDown: "PushBottom", RevealRight: "SwooshRight" };
+                const effect = effAlias[rawEff] || rawEff;
                 const rev = !!params?.dveReverse;
-                const prog = p;
+                const prog = rev ? (1 - p) : p;
 
-                if (effect === "PushLeft" || (effect === "PushRight" && rev)) {
-                    const ox = Math.round(w * prog);
-                    ctx.drawImage(pgmCanvas, ox, 0, w, h);
-                    ctx.drawImage(pvwCanvas, ox - w, 0, w, h);
-                } else if (effect === "PushUp") {
-                    const oy = Math.round(h * prog);
-                    ctx.drawImage(pgmCanvas, 0, -oy, w, h);
-                    ctx.drawImage(pvwCanvas, 0, h - oy, w, h);
-                } else if (effect === "PushDown") {
-                    const oy = Math.round(h * prog);
-                    ctx.drawImage(pgmCanvas, 0, oy, w, h);
-                    ctx.drawImage(pvwCanvas, 0, oy - h, w, h);
-                } else if (effect === "SqueezeLeft") {
-                    const remW = Math.max(0, w * (1 - prog));
+                if (effect.startsWith("Push")) {
+                    let dx = 1, dy = 0;
+                    if (effect.includes("Left")) dx = -1;
+                    else if (effect.includes("Right")) dx = 1;
+                    else dx = 0;
+                    if (effect.includes("Top")) dy = -1;
+                    else if (effect.includes("Bottom")) dy = 1;
+                    else dy = 0;
+                    const ox = Math.round(w * prog * dx);
+                    const oy = Math.round(h * prog * dy);
+                    ctx.drawImage(pgmCanvas, ox, oy, w, h);
+                    ctx.drawImage(pvwCanvas, ox - dx * w, oy - dy * h, w, h);
+                } else if (effect.startsWith("Squeeze")) {
+                    const remW = Math.max(0.001, effect.includes("Left") || effect.includes("Right") || effect.includes("Corner") || /Top|Bottom/.test(effect) ? w * (1 - prog) : w);
+                    const remH = Math.max(0.001, /Top|Bottom/.test(effect) && !(effect === "SqueezeLeft" || effect === "SqueezeRight") ? h * (1 - prog) : h);
+                    const sx = effect.includes("Right") ? (w - remW) : 0;
+                    const sy = effect.includes("Bottom") ? (h - remH) : 0;
                     ctx.drawImage(pvwCanvas, 0, 0, w, h);
-                    if (remW > 0) ctx.drawImage(pgmCanvas, rev ? (w - remW) : 0, 0, remW, h);
-                } else if (effect === "RevealRight") {
-                    const ox = Math.round(w * prog);
-                    ctx.drawImage(pvwCanvas, 0, 0, w, h);
-                    ctx.drawImage(pgmCanvas, rev ? -ox : ox, 0, w, h);
+                    if (prog < 1) ctx.drawImage(pgmCanvas, sx, sy, remW, remH);
+                } else if (effect.startsWith("Spin") || effect === "GraphicCWSpin" || effect === "GraphicCCWSpin") {
+                    ctx.drawImage(pgmCanvas, 0, 0, w, h);
+                    const dir = effect.includes("CCW") ? -1 : 1;
+                    ctx.save();
+                    ctx.translate(w / 2, h / 2);
+                    ctx.rotate(dir * (1 - prog) * Math.PI * 2);
+                    ctx.scale(Math.max(0.02, prog), Math.max(0.02, prog));
+                    ctx.drawImage(pvwCanvas, -w / 2, -h / 2, w, h);
+                    ctx.restore();
                 } else {
-                    const ox = Math.round(w * prog);
-                    ctx.drawImage(pgmCanvas, -ox, 0, w, h);
-                    ctx.drawImage(pvwCanvas, w - ox, 0, w, h);
+                    // Swoosh & Graphic wipes: slide incoming frame across outgoing frame
+                    let dx = 1, dy = 0;
+                    if (effect.includes("Left")) dx = -1;
+                    else if (effect.includes("Right")) dx = 1;
+                    else dx = 0;
+                    if (effect.includes("Top")) dy = -1;
+                    else if (effect.includes("Bottom")) dy = 1;
+                    const ox = Math.round(w * (1 - prog) * dx);
+                    const oy = Math.round(h * (1 - prog) * dy);
+                    ctx.drawImage(pgmCanvas, 0, 0, w, h);
+                    ctx.drawImage(pvwCanvas, ox, oy, w, h);
                 }
                 break;
             }

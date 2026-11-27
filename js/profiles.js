@@ -308,3 +308,29 @@ function getMultiviewerCount(profile = getProfile()) {
     if ((profile.me || 1) >= 2) return 2;
     return 1;
 }
+
+function getProfileNameForCap(profile = getProfile()) {
+    return Object.keys(profiles).find(k => profiles[k] === profile) || (typeof state !== "undefined" ? state.deviceProfile : "") || "";
+}
+
+function supportsStreamingRecording(profile = getProfile()) {
+    if (!profile) return false;
+    if (typeof profile.supportsStreamingRecording === "boolean") return profile.supportsStreamingRecording;
+    const name = getProfileNameForCap(profile);
+    return /Mini Pro|Mini Extreme|SDI Pro|SDI Extreme|Television Studio (HD8|4K8)/i.test(name);
+}
+
+function supportsISORecording(profile = getProfile()) {
+    if (!profile) return false;
+    if (typeof profile.supportsISORecording === "boolean") return profile.supportsISORecording;
+    const name = getProfileNameForCap(profile);
+    return /\bISO\b/i.test(name);
+}
+
+function isStreamingRecordingAvailable(profile = getProfile()) {
+    if (typeof state !== "undefined") {
+        if (state.streaming?._hardwareSupported === true || state.recording?._hardwareSupported === true) return true;
+        if (state.streaming?._hardwareSupported === false && state.recording?._hardwareSupported === false) return false;
+    }
+    return supportsStreamingRecording(profile);
+}

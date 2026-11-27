@@ -15,26 +15,49 @@ const ViewSwitcher = (() => {
     const LAYOUT_KEY = "atem_prog_switcher_layout_v5";
     const CUSTOM_LAYOUT_KEY = "atem_prog_switcher_custom_v4";
     const SAVED_PRESETS_KEY = "atem_prog_switcher_saved_presets_v1";
+    const GRID_COLS = 24;
     const ROW_HEIGHT = 44;
-    const GRID_GAP = 10;
+    const GRID_GAP = 8;
     const ROW_PITCH = ROW_HEIGHT + GRID_GAP;
 
-    const BASE_ME_BLOCKS = ["monitors", "bus", "trans", "dsk", "destBus", "ssPresets", "aux", "macros", "sources"];
-    const SHARED_BLOCKS = ["multiTrans", "dsk", "destBus", "ssPresets", "aux", "macros", "sources"];
-    const ORIENTABLE_TYPES = new Set(["monitors", "bus", "trans", "multiTrans", "dsk", "destBus"]);
-    const SCALABLE_TYPES = new Set(["bus", "trans", "multiTrans", "dsk", "destBus", "ssPresets", "aux", "macros", "sources"]);
+    const BASE_ME_BLOCKS = ["monitors", "bus", "trans", "usk", "dsk", "destBus", "mediaPlayers", "ssPresets", "ssBoxes", "aux", "macros", "sources", "streamRec"];
+    const SHARED_BLOCKS = ["multiTrans", "dsk", "destBus", "mediaPlayers", "ssPresets", "ssBoxes", "aux", "macros", "sources", "streamRec"];
+    const ORIENTABLE_TYPES = new Set(["monitors", "bus", "trans", "multiTrans", "usk", "dsk", "destBus", "mediaPlayers", "ssBoxes", "streamRec"]);
+    const SCALABLE_TYPES = new Set(["bus", "trans", "multiTrans", "usk", "dsk", "destBus", "mediaPlayers", "ssPresets", "ssBoxes", "aux", "macros", "sources", "streamRec"]);
+    const FILTERABLE_TYPES = new Set(["monitors", "trans", "multiTrans", "usk", "dsk", "mediaPlayers", "ssBoxes", "sources", "aux", "streamRec", "macros"]);
+    const MIN_SPAN_BY_TYPE = {
+        monitors: 4,
+        bus: 2,
+        destBus: 2,
+        trans: 1,
+        multiTrans: 1,
+        usk: 1,
+        dsk: 1,
+        mediaPlayers: 2,
+        ssPresets: 3,
+        ssBoxes: 2,
+        aux: 2,
+        macros: 2,
+        sources: 2,
+        streamRec: 1
+    };
+    const REGION_SWATCHES = ["#3b82f6", "#ef4444", "#22c55e", "#f59e0b", "#a855f7", "#06b6d4", "#ec4899", "#64748b"];
 
     const DEFAULT_RECTS_BY_TYPE = {
-        monitors:   { col: 1, row: 1, span: 12, rowSpan: 6 },
-        bus:        { col: 1, row: 7, span: 12, rowSpan: 3 },
-        trans:      { col: 1, row: 10, span: 8, rowSpan: 3 },
-        multiTrans: { col: 1, row: 10, span: 8, rowSpan: 3 },
-        dsk:        { col: 9, row: 10, span: 4, rowSpan: 3 },
-        destBus:    { col: 1, row: 13, span: 12, rowSpan: 3 },
-        ssPresets:  { col: 1, row: 16, span: 6, rowSpan: 4 },
-        aux:        { col: 1, row: 16, span: 6, rowSpan: 4 },
-        macros:     { col: 7, row: 16, span: 6, rowSpan: 4 },
-        sources:    { col: 1, row: 20, span: 12, rowSpan: 4 }
+        monitors:     { col: 1, row: 1, span: 24, rowSpan: 6 },
+        bus:          { col: 1, row: 7, span: 24, rowSpan: 3 },
+        trans:        { col: 1, row: 10, span: 16, rowSpan: 3 },
+        multiTrans:   { col: 1, row: 10, span: 16, rowSpan: 3 },
+        usk:          { col: 1, row: 13, span: 12, rowSpan: 3 },
+        dsk:          { col: 17, row: 10, span: 8, rowSpan: 3 },
+        destBus:      { col: 1, row: 13, span: 24, rowSpan: 3 },
+        mediaPlayers: { col: 1, row: 16, span: 12, rowSpan: 4 },
+        ssPresets:    { col: 1, row: 16, span: 12, rowSpan: 4 },
+        ssBoxes:      { col: 13, row: 16, span: 12, rowSpan: 4 },
+        aux:          { col: 1, row: 16, span: 12, rowSpan: 4 },
+        macros:       { col: 13, row: 16, span: 12, rowSpan: 4 },
+        sources:      { col: 1, row: 20, span: 24, rowSpan: 4 },
+        streamRec:    { col: 17, row: 13, span: 8, rowSpan: 3 }
     };
 
     const DEFAULT_ORIENT_BY_TYPE = {
@@ -42,33 +65,49 @@ const ViewSwitcher = (() => {
         bus: "row",
         trans: "row",
         multiTrans: "row",
+        usk: "row",
         dsk: "row",
-        destBus: "row"
+        destBus: "row",
+        mediaPlayers: "row",
+        ssBoxes: "row",
+        streamRec: "row"
     };
 
     const DEFAULT_ME_LAYOUT = {
+        gridCols: 24,
+        showMode: false,
         locked: true,
+        layoutLocked: false,
         visible: {
             monitors: true,
             bus: true,
             trans: true,
+            usk: false,
             dsk: true,
             destBus: false,
+            mediaPlayers: false,
             ssPresets: false,
+            ssBoxes: false,
             aux: false,
             macros: false,
-            sources: false
+            sources: false,
+            streamRec: false
         },
         rects: JSON.parse(JSON.stringify(DEFAULT_RECTS_BY_TYPE)),
         orientations: { ...DEFAULT_ORIENT_BY_TYPE },
+        subOrientations: {},
         buttonScale: "md",
         panelScales: {},
         destTargets: { destBus: "aux:1" },
         extraDestBuses: [],
         extraMultiTrans: [],
+        extraBlocks: [],
         busFilters: { bus: "all", destBus: "all" },
         busRows: {},
         transSections: {}, // { [blockKey]: { style, next, take } or { targets, style, take } }
+        itemFilters: {},   // { [blockKey]: ["dsk_0", ...] } (hidden item IDs per panel)
+        panelState: {},    // { [blockKey]: { ssIndex, macroBank } }
+        regions: [],       // [{ id, title, color, col, row, span, rowSpan }]
         pageShortcutTargets: ["bus"],
         multiTransTargets: {}
     };
@@ -76,87 +115,107 @@ const ViewSwitcher = (() => {
     const LAYOUT_PRESETS = {
         stacked: {
             label: "Stacked",
-            visible: { monitors: true, bus: true, trans: true, dsk: true, destBus: false, ssPresets: false, aux: false, macros: false, sources: false },
+            visible: { monitors: true, bus: true, trans: true, usk: false, dsk: true, destBus: false, mediaPlayers: false, ssPresets: false, ssBoxes: false, aux: false, macros: false, sources: false, streamRec: false },
             rects: {
-                monitors:  { col: 1, row: 1, span: 12, rowSpan: 6 },
-                bus:       { col: 1, row: 7, span: 12, rowSpan: 3 },
-                trans:     { col: 1, row: 10, span: 8, rowSpan: 3 },
-                dsk:       { col: 9, row: 10, span: 4, rowSpan: 3 },
-                destBus:   { col: 1, row: 13, span: 12, rowSpan: 3 },
-                ssPresets: { col: 1, row: 16, span: 6, rowSpan: 4 },
-                aux:       { col: 1, row: 16, span: 6, rowSpan: 4 },
-                macros:    { col: 7, row: 16, span: 6, rowSpan: 4 },
-                sources:   { col: 1, row: 20, span: 12, rowSpan: 4 }
+                monitors:     { col: 1, row: 1, span: 24, rowSpan: 6 },
+                bus:          { col: 1, row: 7, span: 24, rowSpan: 3 },
+                trans:        { col: 1, row: 10, span: 16, rowSpan: 3 },
+                usk:          { col: 1, row: 13, span: 12, rowSpan: 3 },
+                dsk:          { col: 17, row: 10, span: 8, rowSpan: 3 },
+                destBus:      { col: 1, row: 13, span: 24, rowSpan: 3 },
+                mediaPlayers: { col: 1, row: 16, span: 12, rowSpan: 4 },
+                ssPresets:    { col: 1, row: 16, span: 12, rowSpan: 4 },
+                ssBoxes:      { col: 13, row: 16, span: 12, rowSpan: 4 },
+                aux:          { col: 1, row: 16, span: 12, rowSpan: 4 },
+                macros:       { col: 13, row: 16, span: 12, rowSpan: 4 },
+                sources:      { col: 1, row: 20, span: 24, rowSpan: 4 },
+                streamRec:    { col: 17, row: 13, span: 8, rowSpan: 3 }
             },
-            orientations: { monitors: "row", bus: "row", trans: "row", dsk: "row", destBus: "row" }
+            orientations: { monitors: "row", bus: "row", trans: "row", usk: "row", dsk: "row", destBus: "row", mediaPlayers: "row", ssBoxes: "row" }
         },
         sideBySide: {
             label: "Side-by-Side",
-            visible: { monitors: true, bus: true, trans: true, dsk: true, destBus: false, ssPresets: false, aux: false, macros: true, sources: false },
+            visible: { monitors: true, bus: true, trans: true, usk: false, dsk: true, destBus: false, mediaPlayers: false, ssPresets: false, ssBoxes: false, aux: false, macros: true, sources: false, streamRec: false },
             rects: {
-                monitors:  { col: 1, row: 1, span: 6, rowSpan: 7 },
-                bus:       { col: 7, row: 1, span: 6, rowSpan: 7 },
-                trans:     { col: 1, row: 8, span: 5, rowSpan: 4 },
-                dsk:       { col: 6, row: 8, span: 3, rowSpan: 4 },
-                macros:    { col: 9, row: 8, span: 4, rowSpan: 4 },
-                destBus:   { col: 1, row: 12, span: 12, rowSpan: 3 },
-                ssPresets: { col: 1, row: 15, span: 6, rowSpan: 4 },
-                aux:       { col: 1, row: 15, span: 6, rowSpan: 4 },
-                sources:   { col: 7, row: 15, span: 6, rowSpan: 4 }
+                monitors:     { col: 1, row: 1, span: 12, rowSpan: 7 },
+                bus:          { col: 13, row: 1, span: 12, rowSpan: 7 },
+                trans:        { col: 1, row: 8, span: 10, rowSpan: 4 },
+                usk:          { col: 1, row: 12, span: 10, rowSpan: 3 },
+                dsk:          { col: 11, row: 8, span: 6, rowSpan: 4 },
+                macros:       { col: 17, row: 8, span: 8, rowSpan: 4 },
+                destBus:      { col: 1, row: 12, span: 24, rowSpan: 3 },
+                mediaPlayers: { col: 1, row: 15, span: 12, rowSpan: 4 },
+                ssPresets:    { col: 1, row: 15, span: 12, rowSpan: 4 },
+                ssBoxes:      { col: 13, row: 15, span: 12, rowSpan: 4 },
+                aux:          { col: 1, row: 15, span: 12, rowSpan: 4 },
+                sources:      { col: 13, row: 15, span: 12, rowSpan: 4 },
+                streamRec:    { col: 17, row: 12, span: 8, rowSpan: 3 }
             },
-            orientations: { monitors: "col", bus: "col", trans: "col", dsk: "col", destBus: "row" }
+            orientations: { monitors: "col", bus: "col", trans: "col", usk: "row", dsk: "col", destBus: "row", mediaPlayers: "row", ssBoxes: "row" }
         },
         verticalDesk: {
             label: "Vertical Monitors",
-            visible: { monitors: true, bus: true, trans: true, dsk: true, destBus: false, ssPresets: false, aux: false, macros: false, sources: false },
+            visible: { monitors: true, bus: true, trans: true, usk: false, dsk: true, destBus: false, mediaPlayers: false, ssPresets: false, ssBoxes: false, aux: false, macros: false, sources: false, streamRec: false },
             rects: {
-                monitors:  { col: 1, row: 1, span: 4, rowSpan: 9 },
-                bus:       { col: 5, row: 1, span: 8, rowSpan: 4 },
-                trans:     { col: 5, row: 5, span: 8, rowSpan: 3 },
-                dsk:       { col: 5, row: 8, span: 8, rowSpan: 2 },
-                aux:       { col: 1, row: 10, span: 12, rowSpan: 4 },
-                destBus:   { col: 1, row: 14, span: 12, rowSpan: 3 },
-                ssPresets: { col: 1, row: 17, span: 6, rowSpan: 4 },
-                macros:    { col: 1, row: 17, span: 6, rowSpan: 4 },
-                sources:   { col: 7, row: 17, span: 6, rowSpan: 4 }
+                monitors:     { col: 1, row: 1, span: 8, rowSpan: 9 },
+                bus:          { col: 9, row: 1, span: 16, rowSpan: 4 },
+                trans:        { col: 9, row: 5, span: 16, rowSpan: 3 },
+                usk:          { col: 9, row: 8, span: 8, rowSpan: 2 },
+                dsk:          { col: 9, row: 8, span: 16, rowSpan: 2 },
+                aux:          { col: 1, row: 10, span: 24, rowSpan: 4 },
+                destBus:      { col: 1, row: 14, span: 24, rowSpan: 3 },
+                mediaPlayers: { col: 1, row: 17, span: 12, rowSpan: 4 },
+                ssPresets:    { col: 1, row: 17, span: 12, rowSpan: 4 },
+                ssBoxes:      { col: 13, row: 17, span: 12, rowSpan: 4 },
+                macros:       { col: 1, row: 17, span: 12, rowSpan: 4 },
+                sources:      { col: 13, row: 17, span: 12, rowSpan: 4 },
+                streamRec:    { col: 17, row: 14, span: 8, rowSpan: 3 }
             },
-            orientations: { monitors: "col", bus: "row", trans: "row", dsk: "row", destBus: "row" }
+            orientations: { monitors: "col", bus: "row", trans: "row", usk: "row", dsk: "row", destBus: "row", mediaPlayers: "row", ssBoxes: "row" }
         },
         broadcast: {
             label: "Full Studio Grid",
-            visible: { monitors: true, bus: true, trans: true, dsk: true, destBus: true, ssPresets: true, aux: true, macros: true, sources: false },
+            visible: { monitors: true, bus: true, trans: true, usk: true, dsk: true, destBus: true, mediaPlayers: true, ssPresets: true, ssBoxes: false, aux: true, macros: true, sources: false, streamRec: true },
             rects: {
-                monitors:  { col: 1, row: 1, span: 8, rowSpan: 6 },
-                aux:       { col: 9, row: 1, span: 4, rowSpan: 6 },
-                bus:       { col: 1, row: 7, span: 12, rowSpan: 3 },
-                trans:     { col: 1, row: 10, span: 8, rowSpan: 3 },
-                dsk:       { col: 9, row: 10, span: 4, rowSpan: 3 },
-                destBus:   { col: 1, row: 13, span: 8, rowSpan: 3 },
-                macros:    { col: 9, row: 13, span: 4, rowSpan: 4 },
-                ssPresets: { col: 1, row: 16, span: 8, rowSpan: 4 },
-                sources:   { col: 1, row: 20, span: 12, rowSpan: 4 }
+                monitors:     { col: 1, row: 1, span: 16, rowSpan: 6 },
+                aux:          { col: 17, row: 1, span: 8, rowSpan: 6 },
+                bus:          { col: 1, row: 7, span: 24, rowSpan: 3 },
+                trans:        { col: 1, row: 10, span: 12, rowSpan: 3 },
+                usk:          { col: 13, row: 10, span: 6, rowSpan: 3 },
+                dsk:          { col: 19, row: 10, span: 6, rowSpan: 3 },
+                destBus:      { col: 1, row: 13, span: 16, rowSpan: 3 },
+                macros:       { col: 17, row: 13, span: 8, rowSpan: 4 },
+                ssPresets:    { col: 1, row: 16, span: 10, rowSpan: 4 },
+                mediaPlayers: { col: 11, row: 16, span: 6, rowSpan: 4 },
+                ssBoxes:      { col: 1, row: 20, span: 12, rowSpan: 4 },
+                streamRec:    { col: 17, row: 17, span: 8, rowSpan: 3 },
+                sources:      { col: 1, row: 20, span: 24, rowSpan: 4 }
             },
-            orientations: { monitors: "row", bus: "row", trans: "row", dsk: "row", destBus: "row" }
+            orientations: { monitors: "row", bus: "row", trans: "row", usk: "row", dsk: "row", destBus: "row", mediaPlayers: "row", ssBoxes: "row" }
         }
     };
 
     function parseBlockKey(blockKey) {
-        const meMatch = String(blockKey).match(/^me(\d+):(monitors|bus|trans)$/);
+        const key = String(blockKey || "");
+        const meMatch = key.match(/^me(\d+):(monitors|bus|trans|usk)(?:_(\d+))?$/);
         if (meMatch) {
-            return { type: meMatch[2], meIndex: parseInt(meMatch[1], 10), isCustomMe: true, isExtra: false };
+            return { type: meMatch[2], meIndex: parseInt(meMatch[1], 10), isCustomMe: true, isExtra: !!meMatch[3] };
         }
-        if (blockKey === "destBus" || String(blockKey).startsWith("destBus_")) {
-            return { type: "destBus", meIndex: null, isCustomMe: false, isExtra: blockKey !== "destBus" };
+        const stdMatch = key.match(/^(monitors|bus|trans|multiTrans|usk|dsk|destBus|mediaPlayers|ssPresets|ssBoxes|aux|macros|sources|streamRec)(?:_(\d+))?$/);
+        if (stdMatch) {
+            return { type: stdMatch[1], meIndex: null, isCustomMe: false, isExtra: !!stdMatch[2] };
         }
-        if (blockKey === "multiTrans" || String(blockKey).startsWith("multiTrans_")) {
-            return { type: "multiTrans", meIndex: null, isCustomMe: false, isExtra: blockKey !== "multiTrans" };
-        }
-        return { type: blockKey, meIndex: null, isCustomMe: false, isExtra: false };
+        return { type: key, meIndex: null, isCustomMe: false, isExtra: false };
+    }
+
+    function getMinSpanForKey(blockKey) {
+        const parsed = parseBlockKey(blockKey);
+        return MIN_SPAN_BY_TYPE[parsed.type] || 1;
     }
 
     function getDefaultRectForKey(blockKey) {
         const parsed = parseBlockKey(blockKey);
-        return DEFAULT_RECTS_BY_TYPE[parsed.type] || { col: 1, row: 1, span: 12, rowSpan: 4 };
+        return DEFAULT_RECTS_BY_TYPE[parsed.type] || { col: 1, row: 1, span: GRID_COLS, rowSpan: 4 };
     }
 
     function getDefaultOrientForKey(blockKey) {
@@ -197,6 +256,32 @@ const ViewSwitcher = (() => {
         };
     }
 
+    function getSubOrientation(activeLayout, blockKey, subName, fallback = "row") {
+        const val = activeLayout?.subOrientations?.[`${blockKey}:${subName}`];
+        if (val === "col" || val === "row") return val;
+        return fallback;
+    }
+
+    function renderSubOrientBtn(blockKey, subName, curOrient) {
+        if (getEffectiveLocks(getActiveLayout()).isLayoutLocked) return "";
+        const esc = AppUI.esc;
+        const isCol = curOrient === "col";
+        return `<button type="button" class="sw-sub-orient-btn ${isCol ? "is-col" : ""}" data-sub-orient-blk="${esc(blockKey)}" data-sub-orient-name="${esc(subName)}" title="Arrange ${esc(subName)} ${isCol ? "horizontally (H)" : "vertically (V)"}">${isCol ? "⇅" : "⇄"}</button>`;
+    }
+
+    function getEffectiveLocks(activeLayout) {
+        const isShowMode = !!activeLayout?.showMode;
+        const isGridLocked = isShowMode || !!activeLayout?.locked;
+        const isLayoutLocked = isShowMode || !!activeLayout?.layoutLocked;
+        return { isShowMode, isGridLocked, isLayoutLocked };
+    }
+
+    function hasStreamingRecording(profile = getProfile()) {
+        if (typeof isStreamingRecordingAvailable === "function") return isStreamingRecordingAvailable(profile);
+        if (typeof supportsStreamingRecording === "function") return supportsStreamingRecording(profile);
+        return false;
+    }
+
     function buildDefaultCustomLayout() {
         const meCount = Math.max(1, (typeof getProfile === "function" ? getProfile()?.me : 2) || 2);
         const hasSS = ((typeof getProfile === "function" ? getProfile()?.superSource : 0) || 0) > 0;
@@ -205,80 +290,104 @@ const ViewSwitcher = (() => {
             "me0:monitors": true,
             "me0:bus": true,
             "me0:trans": true,
+            "me0:usk": false,
             "me1:monitors": meCount >= 2,
             "me1:bus": meCount >= 2,
             "me1:trans": meCount >= 2,
+            "me1:usk": false,
             multiTrans: false,
             dsk: true,
             destBus: true,
+            mediaPlayers: false,
             ssPresets: hasSS,
+            ssBoxes: false,
             aux: false,
             macros: false,
-            sources: false
+            sources: false,
+            streamRec: false
         };
         const rects = meCount >= 2 ? {
-            "me0:monitors": { col: 1, row: 1, span: 6, rowSpan: 5 },
-            "me1:monitors": { col: 7, row: 1, span: 6, rowSpan: 5 },
-            "me0:bus":      { col: 1, row: 6, span: 6, rowSpan: 4 },
-            "me1:bus":      { col: 7, row: 6, span: 6, rowSpan: 4 },
-            "me0:trans":    { col: 1, row: 10, span: 6, rowSpan: 3 },
-            "me1:trans":    { col: 7, row: 10, span: 6, rowSpan: 3 },
-            multiTrans:     { col: 1, row: 13, span: 8, rowSpan: 3 },
-            dsk:            { col: 1, row: 13, span: 4, rowSpan: 3 },
-            destBus:        { col: 5, row: 13, span: 8, rowSpan: 3 },
-            ssPresets:      { col: 1, row: 16, span: 6, rowSpan: 4 },
-            aux:            { col: 1, row: 20, span: 6, rowSpan: 4 },
-            macros:         { col: 7, row: 16, span: 6, rowSpan: 4 },
-            sources:        { col: 1, row: 24, span: 12, rowSpan: 4 }
+            "me0:monitors": { col: 1, row: 1, span: 12, rowSpan: 5 },
+            "me1:monitors": { col: 13, row: 1, span: 12, rowSpan: 5 },
+            "me0:bus":      { col: 1, row: 6, span: 12, rowSpan: 4 },
+            "me1:bus":      { col: 13, row: 6, span: 12, rowSpan: 4 },
+            "me0:trans":    { col: 1, row: 10, span: 12, rowSpan: 3 },
+            "me1:trans":    { col: 13, row: 10, span: 12, rowSpan: 3 },
+            "me0:usk":      { col: 1, row: 13, span: 12, rowSpan: 3 },
+            "me1:usk":      { col: 13, row: 13, span: 12, rowSpan: 3 },
+            multiTrans:     { col: 1, row: 13, span: 16, rowSpan: 3 },
+            dsk:            { col: 1, row: 13, span: 8, rowSpan: 3 },
+            destBus:        { col: 9, row: 13, span: 16, rowSpan: 3 },
+            mediaPlayers:   { col: 13, row: 16, span: 12, rowSpan: 4 },
+            ssPresets:      { col: 1, row: 16, span: 12, rowSpan: 4 },
+            ssBoxes:        { col: 13, row: 16, span: 12, rowSpan: 4 },
+            aux:            { col: 1, row: 20, span: 12, rowSpan: 4 },
+            macros:         { col: 13, row: 16, span: 12, rowSpan: 4 },
+            sources:        { col: 1, row: 24, span: 24, rowSpan: 4 },
+            streamRec:      { col: 17, row: 13, span: 8, rowSpan: 3 }
         } : {
-            "me0:monitors": { col: 1, row: 1, span: 12, rowSpan: 6 },
-            "me0:bus":      { col: 1, row: 7, span: 12, rowSpan: 3 },
-            "me0:trans":    { col: 1, row: 10, span: 8, rowSpan: 3 },
-            multiTrans:     { col: 1, row: 13, span: 8, rowSpan: 3 },
-            dsk:            { col: 9, row: 10, span: 4, rowSpan: 3 },
-            destBus:        { col: 1, row: 13, span: 8, rowSpan: 3 },
-            ssPresets:      { col: 9, row: 13, span: 4, rowSpan: 4 },
-            aux:            { col: 1, row: 17, span: 6, rowSpan: 4 },
-            macros:         { col: 7, row: 17, span: 6, rowSpan: 4 },
-            sources:        { col: 1, row: 21, span: 12, rowSpan: 4 }
+            "me0:monitors": { col: 1, row: 1, span: 24, rowSpan: 6 },
+            "me0:bus":      { col: 1, row: 7, span: 24, rowSpan: 3 },
+            "me0:trans":    { col: 1, row: 10, span: 16, rowSpan: 3 },
+            "me0:usk":      { col: 1, row: 13, span: 12, rowSpan: 3 },
+            multiTrans:     { col: 1, row: 13, span: 16, rowSpan: 3 },
+            dsk:            { col: 17, row: 10, span: 8, rowSpan: 3 },
+            destBus:        { col: 1, row: 13, span: 16, rowSpan: 3 },
+            mediaPlayers:   { col: 17, row: 13, span: 8, rowSpan: 4 },
+            ssPresets:      { col: 17, row: 13, span: 8, rowSpan: 4 },
+            ssBoxes:        { col: 13, row: 17, span: 12, rowSpan: 4 },
+            aux:            { col: 1, row: 17, span: 12, rowSpan: 4 },
+            macros:         { col: 13, row: 17, span: 12, rowSpan: 4 },
+            sources:        { col: 1, row: 21, span: 24, rowSpan: 4 },
+            streamRec:      { col: 17, row: 13, span: 8, rowSpan: 3 }
         };
         return {
+            gridCols: 24,
+            showMode: false,
             locked: true,
+            layoutLocked: false,
             visible,
             rects,
             orientations: {
-                "me0:monitors": "row", "me0:bus": "row", "me0:trans": "row",
-                "me1:monitors": "row", "me1:bus": "row", "me1:trans": "row",
-                multiTrans: "row", dsk: "row", destBus: "row"
+                "me0:monitors": "row", "me0:bus": "row", "me0:trans": "row", "me0:usk": "row",
+                "me1:monitors": "row", "me1:bus": "row", "me1:trans": "row", "me1:usk": "row",
+                multiTrans: "row", dsk: "row", destBus: "row", mediaPlayers: "row", ssBoxes: "row", streamRec: "row"
             },
+            subOrientations: {},
             buttonScale: "md",
             panelScales: {},
             destTargets: { destBus: "aux:1" },
             extraDestBuses: [],
             extraMultiTrans: [],
+            extraBlocks: [],
             busFilters: { "me0:bus": "all", "me1:bus": "all", destBus: "all" },
             busRows: {},
             transSections: {},
+            itemFilters: {},
+            panelState: {},
+            regions: [],
             pageShortcutTargets: ["me0:bus"],
             multiTransTargets: { multiTrans: defaultMultiTargets },
             shortcutTargets: ["me:0"]
         };
     }
 
-    function clampSpan(n) {
-        const v = Math.round(Number(n) || 12);
-        return Math.max(2, Math.min(12, v));
+    function clampSpan(n, minSpan = 1) {
+        const min = Math.max(1, Math.min(GRID_COLS, Math.round(Number(minSpan) || 1)));
+        const v = Math.round(Number(n) || GRID_COLS);
+        return Math.max(min, Math.min(GRID_COLS, v));
     }
 
     function clampRowSpan(n) {
         const v = Math.round(Number(n) || 3);
-        return Math.max(2, Math.min(20, v));
+        return Math.max(1, Math.min(20, v));
     }
 
-    function clampRect(r, fallback = { col: 1, row: 1, span: 12, rowSpan: 3 }) {
+    function clampRect(r, fallback = { col: 1, row: 1, span: GRID_COLS, rowSpan: 3 }, blockKey = null) {
         const src = r || fallback;
-        const span = clampSpan(src.span ?? fallback.span);
-        const col = Math.max(1, Math.min(13 - span, Math.round(Number(src.col) || fallback.col || 1)));
+        const minSpan = blockKey ? getMinSpanForKey(blockKey) : 1;
+        const span = clampSpan(src.span ?? fallback.span, minSpan);
+        const col = Math.max(1, Math.min(GRID_COLS + 1 - span, Math.round(Number(src.col) || fallback.col || 1)));
         const row = Math.max(1, Math.min(80, Math.round(Number(src.row) || fallback.row || 1)));
         const rowSpan = clampRowSpan(src.rowSpan ?? fallback.rowSpan);
         return { col, row, span, rowSpan };
@@ -300,7 +409,7 @@ const ViewSwitcher = (() => {
         ]));
         const next = {};
         allIds.forEach(id => {
-            next[id] = clampRect(rectsMap?.[id], getDefaultRectForKey(id));
+            next[id] = clampRect(rectsMap?.[id], getDefaultRectForKey(id), id);
         });
         const visIds = allIds.filter(id => visibleMap?.[id]);
         if (!activeId || !visibleMap?.[activeId]) return next;
@@ -343,7 +452,7 @@ const ViewSwitcher = (() => {
         ]));
         const next = {};
         allIds.forEach(id => {
-            next[id] = clampRect(rectsMap?.[id], getDefaultRectForKey(id));
+            next[id] = clampRect(rectsMap?.[id], getDefaultRectForKey(id), id);
         });
         const others = allIds.filter(id => id !== blockId && visibleMap?.[id]);
         let candidate = { ...next[blockId] };
@@ -367,44 +476,91 @@ const ViewSwitcher = (() => {
         return null;
     }
 
+    function scaleLegacyRect12To24(r) {
+        if (!r || typeof r !== "object") return r;
+        const oldCol = Math.max(1, Math.round(Number(r.col) || 1));
+        const oldSpan = Math.max(1, Math.round(Number(r.span) || 12));
+        return {
+            ...r,
+            col: (oldCol - 1) * 2 + 1,
+            span: oldSpan * 2
+        };
+    }
+
     function normalizeLayout(raw, defaults) {
         const d = cloneObj(defaults);
         if (!raw || typeof raw !== "object") return d;
+        const isLegacy12 = raw.gridCols !== GRID_COLS;
         const visible = { ...d.visible, ...(raw.visible || {}) };
         const rects = { ...d.rects };
         Object.keys(raw.rects || {}).forEach(k => {
-            rects[k] = clampRect(raw.rects[k], getDefaultRectForKey(k));
+            const srcRect = isLegacy12 ? scaleLegacyRect12To24(raw.rects[k]) : raw.rects[k];
+            rects[k] = clampRect(srcRect, getDefaultRectForKey(k), k);
         });
         Object.keys(visible).forEach(k => {
-            if (!rects[k]) rects[k] = clampRect(null, getDefaultRectForKey(k));
+            if (!rects[k]) rects[k] = clampRect(null, getDefaultRectForKey(k), k);
         });
         const extraDestBuses = Array.isArray(raw.extraDestBuses)
             ? raw.extraDestBuses.filter(k => typeof k === "string" && k.startsWith("destBus_"))
             : [];
         extraDestBuses.forEach(k => {
-            if (!rects[k]) rects[k] = clampRect(null, DEFAULT_RECTS_BY_TYPE.destBus);
+            if (!rects[k]) rects[k] = clampRect(null, DEFAULT_RECTS_BY_TYPE.destBus, k);
             if (visible[k] === undefined) visible[k] = true;
         });
         const extraMultiTrans = Array.isArray(raw.extraMultiTrans)
             ? raw.extraMultiTrans.filter(k => typeof k === "string" && k.startsWith("multiTrans_"))
             : [];
         extraMultiTrans.forEach(k => {
-            if (!rects[k]) rects[k] = clampRect(null, DEFAULT_RECTS_BY_TYPE.multiTrans);
+            if (!rects[k]) rects[k] = clampRect(null, DEFAULT_RECTS_BY_TYPE.multiTrans, k);
             if (visible[k] === undefined) visible[k] = true;
         });
+        const extraBlocks = Array.isArray(raw.extraBlocks)
+            ? raw.extraBlocks.filter(k => typeof k === "string" && parseBlockKey(k).isExtra && !k.startsWith("destBus_") && !k.startsWith("multiTrans_"))
+            : [];
+        extraBlocks.forEach(k => {
+            if (!rects[k]) rects[k] = clampRect(null, getDefaultRectForKey(k), k);
+            if (visible[k] === undefined) visible[k] = true;
+        });
+        const regions = Array.isArray(raw.regions)
+            ? raw.regions.filter(r => r && r.id).map((r, idx) => {
+                const scaled = isLegacy12 ? scaleLegacyRect12To24(r) : r;
+                const span = clampSpan(scaled.span ?? 12, 2);
+                const col = Math.max(1, Math.min(GRID_COLS + 1 - span, Math.round(Number(scaled.col) || 1)));
+                const row = Math.max(1, Math.min(80, Math.round(Number(scaled.row) || 1)));
+                const rowSpan = Math.max(1, Math.min(30, Math.round(Number(scaled.rowSpan) || 6)));
+                const color = /^#[0-9a-f]{6}$/i.test(String(r.color || "")) ? r.color : REGION_SWATCHES[idx % REGION_SWATCHES.length];
+                return {
+                    id: String(r.id),
+                    title: String(r.title ?? `Region ${idx + 1}`).slice(0, 48),
+                    color,
+                    col,
+                    row,
+                    span,
+                    rowSpan
+                };
+            })
+            : [];
         const out = {
+            gridCols: GRID_COLS,
+            showMode: !!raw.showMode,
             locked: raw.locked !== undefined ? !!raw.locked : true,
+            layoutLocked: !!raw.layoutLocked,
             visible,
             rects,
             orientations: { ...d.orientations, ...(raw.orientations || {}) },
+            subOrientations: raw.subOrientations && typeof raw.subOrientations === "object" ? cloneObj(raw.subOrientations) : {},
             buttonScale: ["sm", "md", "lg"].includes(raw.buttonScale) ? raw.buttonScale : "md",
             panelScales: raw.panelScales && typeof raw.panelScales === "object" ? { ...raw.panelScales } : {},
             destTargets: { ...d.destTargets, ...(raw.destTargets || {}) },
             extraDestBuses,
             extraMultiTrans,
+            extraBlocks,
             busFilters: { ...(d.busFilters || {}), ...(raw.busFilters || {}) },
             busRows: raw.busRows && typeof raw.busRows === "object" ? cloneObj(raw.busRows) : {},
             transSections: raw.transSections && typeof raw.transSections === "object" ? cloneObj(raw.transSections) : {},
+            itemFilters: raw.itemFilters && typeof raw.itemFilters === "object" ? cloneObj(raw.itemFilters) : {},
+            panelState: raw.panelState && typeof raw.panelState === "object" ? cloneObj(raw.panelState) : {},
+            regions,
             pageShortcutTargets: Array.isArray(raw.pageShortcutTargets)
                 ? Array.from(new Set(raw.pageShortcutTargets.filter(k => typeof k === "string")))
                 : [...(d.pageShortcutTargets || [])],
@@ -489,11 +645,159 @@ const ViewSwitcher = (() => {
     let showLayoutMenu = false;
     let editingPageState = null; // { pageId, ownerBlockKey }
     let openMultiTransConfig = new Set();
+    let openPanelFilter = new Set();
+    let openPanelMenu = null;
+    let activeRegionId = null;
     let destPreviewSources = {};
     let macroBank = 0;
     let quickSSIndex = 0;
     let presetSSIndex = 0;
     let lastAppliedSSPresetId = null;
+
+    function hexToRgba(hex, alpha = 1) {
+        const m = String(hex || "").trim().match(/^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+        if (!m) return `rgba(100, 116, 139, ${alpha})`;
+        return `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, ${alpha})`;
+    }
+
+    function isBlockUnderRegionHeader(rect, regions) {
+        if (!rect || !Array.isArray(regions) || !regions.length) return false;
+        return regions.some(r =>
+            rect.row === r.row &&
+            rect.col < r.col + r.span &&
+            rect.col + rect.span > r.col
+        );
+    }
+
+    function isItemVisible(activeLayout, blockKey, itemId) {
+        const hidden = activeLayout?.itemFilters?.[blockKey];
+        if (!Array.isArray(hidden)) return true;
+        return !hidden.includes(itemId);
+    }
+
+    function togglePanelItem(activeLayout, blockKey, itemId) {
+        activeLayout.itemFilters ??= {};
+        const cur = Array.isArray(activeLayout.itemFilters[blockKey]) ? [...activeLayout.itemFilters[blockKey]] : [];
+        const idx = cur.indexOf(itemId);
+        if (idx >= 0) cur.splice(idx, 1);
+        else cur.push(itemId);
+        if (cur.length) activeLayout.itemFilters[blockKey] = cur;
+        else delete activeLayout.itemFilters[blockKey];
+    }
+
+    function getFilterCatalogForPanel(blockKey, panelType, meWs, maxUsks, profile, activeLayout) {
+        if (panelType === "monitors") {
+            return [{ id: "pvw", label: "PVW" }, { id: "pgm", label: "PGM" }];
+        }
+        if (panelType === "trans") {
+            const items = [{ id: "bkgd", label: "BKGD" }];
+            for (let i = 0; i < maxUsks; i++) items.push({ id: `k${i}`, label: `K${i + 1}` });
+            items.push({ id: "cut", label: "CUT" }, { id: "auto", label: "AUTO" }, { id: "ftb", label: "FTB" });
+            return items;
+        }
+        if (panelType === "multiTrans") {
+            return [{ id: "cut", label: "CUT ALL" }, { id: "auto", label: "AUTO ALL" }, { id: "ftb", label: "FTB" }];
+        }
+        if (panelType === "usk") {
+            return Array.from({ length: maxUsks }, (_, i) => ({ id: `usk_${i}`, label: `KEY ${i + 1}` }));
+        }
+        if (panelType === "dsk") {
+            const dsks = typeof getAvailableDSKs === "function" ? getAvailableDSKs() : [];
+            return dsks.map(d => ({ id: `dsk_${d.id}`, label: `DSK ${d.id + 1}` }));
+        }
+        if (panelType === "mediaPlayers") {
+            const mpCount = profile?.mediaPlayers || 1;
+            const items = Array.from({ length: mpCount }, (_, m) => ({ id: `mp_${m}`, label: `MP ${m + 1}` }));
+            items.push({ id: "preview", label: "Preview" });
+            return items;
+        }
+        if (panelType === "ssBoxes") {
+            const items = Array.from({ length: 4 }, (_, bi) => ({ id: `box_${bi}`, label: `Box ${bi + 1}` }));
+            items.push({ id: "art", label: "Art Fill" });
+            return items;
+        }
+        if (panelType === "sources") {
+            const items = [];
+            for (let i = 0; i < maxUsks; i++) items.push({ id: `usk_${i}`, label: `USK ${i + 1}` });
+            const ssList = state.workspaces.filter(w => w.type === "superSource" && isWorkspaceAvailable(w));
+            const ssIdx = activeLayout?.panelState?.[blockKey]?.ssIndex ?? quickSSIndex;
+            const activeSS = ssList[ssIdx] || ssList[0];
+            if (activeSS) {
+                (activeSS.data.boxes || []).forEach((_, bi) => items.push({ id: `box_${bi}`, label: `Box ${bi + 1}` }));
+            }
+            const mpCount = profile?.mediaPlayers || 0;
+            for (let m = 0; m < mpCount; m++) items.push({ id: `mp_${m}`, label: `MP ${m + 1}` });
+            return items;
+        }
+        if (panelType === "aux") {
+            const auxCount = profile?.assignableOutputs || 0;
+            return Array.from({ length: auxCount }, (_, i) => ({ id: `aux_${i + 1}`, label: `AUX ${i + 1}` }));
+        }
+        if (panelType === "streamRec") {
+            return [{ id: "stream", label: "Stream" }, { id: "record", label: "Record" }];
+        }
+        if (panelType === "macros") {
+            return Array.from({ length: 10 }, (_, idx) => ({ id: `m_${idx}`, label: `#${idx + 1}` }));
+        }
+        return [];
+    }
+
+    function renderItemFilterBarHtml(activeLayout, blockKey, panelType, meWs, maxUsks, profile) {
+        const { isGridLocked, isLayoutLocked } = getEffectiveLocks(activeLayout);
+        if (!FILTERABLE_TYPES.has(panelType) || isGridLocked || isLayoutLocked || !openPanelFilter.has(blockKey)) return "";
+        const esc = AppUI.esc;
+        const catalog = getFilterCatalogForPanel(blockKey, panelType, meWs, maxUsks, profile, activeLayout);
+        if (!catalog.length) return "";
+        const hiddenCount = Array.isArray(activeLayout.itemFilters?.[blockKey]) ? activeLayout.itemFilters[blockKey].length : 0;
+        return `
+            <div class="sw-item-filter-bar">
+                <span class="section-label">Show</span>
+                ${catalog.map(it => {
+                    const shown = isItemVisible(activeLayout, blockKey, it.id);
+                    return `
+                        <label class="sw-item-flt-pill ${shown ? "active" : ""}">
+                            <input type="checkbox" data-item-flt-blk="${esc(blockKey)}" data-item-flt-id="${esc(it.id)}" ${shown ? "checked" : ""}>
+                            <span>${esc(it.label)}</span>
+                        </label>
+                    `;
+                }).join("")}
+                ${hiddenCount ? `<button type="button" class="btn btn-xs btn-ghost" data-item-flt-reset="${esc(blockKey)}" title="Show all elements">All</button>` : ""}
+            </div>
+        `;
+    }
+
+    function renderRegionHtml(region, isLocked, isActive) {
+        const esc = AppUI.esc;
+        const bg = hexToRgba(region.color, 0.13);
+        const border = hexToRgba(region.color, 0.72);
+        const headBg = hexToRgba(region.color, 0.88);
+        const showControls = isActive && !isLocked;
+        const displayTitle = String(region.title || "").trim() || "Region";
+        return `
+            <div class="sw-region ${isLocked ? "is-locked" : ""} ${showControls ? "is-active" : ""}" data-region-id="${esc(region.id)}" style="grid-column:${region.col} / span ${region.span}; grid-row:${region.row} / span ${region.rowSpan};">
+                <div class="sw-region-bg" style="background:${bg}; border-color:${border};"></div>
+                ${showControls ? `
+                    <div class="sw-region-head is-active" data-reg-drag="${esc(region.id)}" style="background:${headBg};">
+                        <span title="Drag region">⋮⋮</span>
+                        <input type="text" class="sw-region-title-inp" data-reg-title="${esc(region.id)}" value="${esc(region.title)}" placeholder="Region Title">
+                        <input type="color" class="sw-region-color-inp" data-reg-color="${esc(region.id)}" value="${esc(region.color)}" title="Custom region color">
+                        ${REGION_SWATCHES.slice(0, 6).map(c => `
+                            <button type="button" class="sw-region-swatch" data-reg-swatch="${esc(c)}" data-reg-id="${esc(region.id)}" style="background:${c};" title="${c}"></button>
+                        `).join("")}
+                        <button type="button" class="sw-region-done" data-reg-done="${esc(region.id)}" title="Done editing region">✓</button>
+                        <button type="button" class="sw-region-del" data-reg-del="${esc(region.id)}" title="Delete region">✕</button>
+                    </div>
+                    <div class="sw-region-resize-h" data-reg-resize-h="${esc(region.id)}" title="Resize region height"></div>
+                    <div class="sw-region-resize-w" data-reg-resize-w="${esc(region.id)}" title="Resize region width"></div>
+                    <div class="sw-region-resize-both" data-reg-resize-both="${esc(region.id)}" title="Resize region"></div>
+                ` : ((!isLocked || String(region.title || "").trim()) ? `
+                    <div class="sw-region-head is-passive" ${!isLocked ? `data-reg-activate="${esc(region.id)}" title="Click to edit title, color, position or size"` : ""} style="background:${headBg};">
+                        <span>${esc(isLocked ? region.title : displayTitle)}</span>
+                    </div>
+                ` : "")}
+            </div>
+        `;
+    }
 
     function getCustomLayout() {
         if (!customLayout) {
@@ -527,11 +831,13 @@ const ViewSwitcher = (() => {
         const active = getActiveLayout();
         meLayout = {
             ...active,
+            gridCols: GRID_COLS,
             visible: { ...p.visible },
             rects: cloneObj(p.rects),
             orientations: { ...p.orientations }
         };
         (meLayout.extraDestBuses || []).forEach(k => { meLayout.visible[k] = false; });
+        (meLayout.extraBlocks || []).forEach(k => { meLayout.visible[k] = false; });
         saveActiveLayout();
     }
 
@@ -713,6 +1019,14 @@ const ViewSwitcher = (() => {
                 CanvasRenderer.renderME(canvas.getContext("2d"), ws, { mode: mode === "pvw" ? "preview" : "program" });
             }
         });
+        document.querySelectorAll("[data-sw-mp-canvas]").forEach(canvas => {
+            const mpIdx = Number(canvas.dataset.swMpCanvas);
+            if (Number.isFinite(mpIdx) && typeof CanvasRenderer.renderSource === "function") {
+                try {
+                    CanvasRenderer.renderSource(canvas.getContext("2d"), `mediaPlayer${mpIdx + 1}`);
+                } catch {}
+            }
+        });
     }
 
     function buildSourceOptionsHtml(destType, selectedId, targetWs = null) {
@@ -866,12 +1180,43 @@ const ViewSwitcher = (() => {
             return `<select data-sw-dip-src ${meAttr} style="width:118px; padding:3px 5px; font-size:11px;">${buildSourceOptionsHtml("me", tp.dipSource || "color1", meWs)}</select>`;
         }
         if (d.transitionStyle === "Wipe") {
-            const pats = [["LeftToRightBar","L→R Bar"],["TopToBottomBar","T→B Bar"],["HorizontalBarnDoor","H Barn"],["VerticalBarnDoor","V Barn"],["RectangleIris","Rect Iris"],["CircleIris","Circle Iris"]];
-            return `<select data-sw-wipe-pat ${meAttr} style="width:98px; padding:3px 5px; font-size:11px;">${pats.map(([v,l]) => `<option value="${v}" ${tp.wipePattern === v ? "selected" : ""}>${l}</option>`).join("")}</select><button class="btn btn-xs ${tp.wipeReverse ? "btn-accent-soft" : ""}" data-sw-wipe-rev ${meAttr}>Rev</button>`;
+            const pats = [
+                ["LeftToRightBar", "L→R Bar"],
+                ["TopToBottomBar", "T→B Bar"],
+                ["HorizontalBarnDoor", "H Barn"],
+                ["VerticalBarnDoor", "V Barn"],
+                ["CornersInFourBox", "4-Corner"],
+                ["RectangleIris", "Rect Iris"],
+                ["DiamondIris", "Diamond Iris"],
+                ["CircleIris", "Circle Iris"],
+                ["TopLeftBox", "TL Box"],
+                ["TopRightBox", "TR Box"],
+                ["BottomRightBox", "BR Box"],
+                ["BottomLeftBox", "BL Box"],
+                ["TopCentreBox", "Top Ctr Box"],
+                ["RightCentreBox", "Right Ctr Box"],
+                ["BottomCentreBox", "Bot Ctr Box"],
+                ["LeftCentreBox", "Left Ctr Box"],
+                ["TopLeftDiagonal", "TL Diag"],
+                ["TopRightDiagonal", "TR Diag"]
+            ];
+            return `<select data-sw-wipe-pat ${meAttr} style="width:108px; padding:3px 5px; font-size:11px;">${pats.map(([v, l]) => `<option value="${v}" ${tp.wipePattern === v ? "selected" : ""}>${l}</option>`).join("")}</select><button class="btn btn-xs ${tp.wipeReverse ? "btn-accent-soft" : ""}" data-sw-wipe-rev ${meAttr}>Rev</button>`;
         }
         if (d.transitionStyle === "DVE") {
-            const effs = [["PushRight","Push L←R"],["PushLeft","Push R→L"],["PushUp","Push Up"],["PushDown","Push Down"],["SqueezeLeft","Squeeze"],["RevealRight","Reveal"]];
-            return `<select data-sw-dve-eff ${meAttr} style="width:98px; padding:3px 5px; font-size:11px;">${effs.map(([v,l]) => `<option value="${v}" ${tp.dveEffect === v ? "selected" : ""}>${l}</option>`).join("")}</select><button class="btn btn-xs ${tp.dveReverse ? "btn-accent-soft" : ""}" data-sw-dve-rev ${meAttr}>Rev</button>`;
+            const dveAlias = { PushUp: "PushTop", PushDown: "PushBottom", RevealRight: "SwooshRight" };
+            const curEff = dveAlias[tp.dveEffect] || tp.dveEffect || "PushRight";
+            const effs = [
+                ["PushRight", "Push R"], ["PushLeft", "Push L"], ["PushTop", "Push Up"], ["PushBottom", "Push Down"],
+                ["PushTopLeft", "Push TL"], ["PushTopRight", "Push TR"], ["PushBottomLeft", "Push BL"], ["PushBottomRight", "Push BR"],
+                ["SqueezeLeft", "Squeeze L"], ["SqueezeRight", "Squeeze R"], ["SqueezeTop", "Squeeze Top"], ["SqueezeBottom", "Squeeze Bot"],
+                ["SqueezeTopLeft", "Squeeze TL"], ["SqueezeTopRight", "Squeeze TR"], ["SqueezeBottomLeft", "Squeeze BL"], ["SqueezeBottomRight", "Squeeze BR"],
+                ["SwooshRight", "Swoosh R"], ["SwooshLeft", "Swoosh L"], ["SwooshTop", "Swoosh Top"], ["SwooshBottom", "Swoosh Bot"],
+                ["SwooshTopLeft", "Swoosh TL"], ["SwooshTopRight", "Swoosh TR"], ["SwooshBottomLeft", "Swoosh BL"], ["SwooshBottomRight", "Swoosh BR"],
+                ["SpinCWTopLeft", "Spin CW TL"], ["SpinCWTopRight", "Spin CW TR"], ["SpinCWBottomLeft", "Spin CW BL"], ["SpinCWBottomRight", "Spin CW BR"],
+                ["SpinCCWTopLeft", "Spin CCW TL"], ["SpinCCWTopRight", "Spin CCW TR"], ["SpinCCWBottomLeft", "Spin CCW BL"], ["SpinCCWBottomRight", "Spin CCW BR"],
+                ["GraphicCWSpin", "Graphic CW"], ["GraphicCCWSpin", "Graphic CCW"], ["GraphicLogoWipe", "Graphic Wipe"]
+            ];
+            return `<select data-sw-dve-eff ${meAttr} style="width:108px; padding:3px 5px; font-size:11px;">${effs.map(([v, l]) => `<option value="${v}" ${curEff === v ? "selected" : ""}>${l}</option>`).join("")}</select><button class="btn btn-xs ${tp.dveReverse ? "btn-accent-soft" : ""}" data-sw-dve-rev ${meAttr}>Rev</button>`;
         }
         return "";
     }
@@ -890,7 +1235,7 @@ const ViewSwitcher = (() => {
         const activeCustomRawId = isCustomActive ? curFilter.slice(7) : null;
         const isPageShortcutArmed = (activeLayout.pageShortcutTargets || []).includes(blockKey);
         const rows = getBusRowVisibility(activeLayout, blockKey);
-        const isLocked = !!activeLayout.locked;
+        const { isGridLocked, isLayoutLocked } = getEffectiveLocks(activeLayout);
 
         return `
             <div class="seg">
@@ -900,10 +1245,12 @@ const ViewSwitcher = (() => {
                     </button>
                 `).join("")}
             </div>
-            <button class="btn btn-xs btn-accent-soft" data-add-bus-page="${blockKey}" title="Create a universal custom source page">+ Page</button>
-            ${isCustomActive ? `<button class="btn btn-xs" data-edit-bus-page="${esc(activeCustomRawId)}" data-edit-bus-owner="${blockKey}">✎</button>` : ""}
-            <button class="btn btn-xs ${isPageShortcutArmed ? "btn-amber solid" : ""}" data-toggle-page-shortcut="${blockKey}" title="Arm/disarm Shift+1–9 page shortcuts for this bus panel">⇧#</button>
-            ${!isLocked ? `
+            ${!isLayoutLocked ? `
+                <button class="btn btn-xs btn-accent-soft" data-add-bus-page="${blockKey}" title="Create a universal custom source page">+ Page</button>
+                ${isCustomActive ? `<button class="btn btn-xs" data-edit-bus-page="${esc(activeCustomRawId)}" data-edit-bus-owner="${blockKey}">✎</button>` : ""}
+                <button class="btn btn-xs ${isPageShortcutArmed ? "btn-amber solid" : ""}" data-toggle-page-shortcut="${blockKey}" title="Arm/disarm Shift+1–9 page shortcuts for this bus panel">⇧#</button>
+            ` : ""}
+            ${(!isGridLocked && !isLayoutLocked) ? `
                 <div class="sw-span-seg" title="Show/Hide PGM and PVW button rows on this panel">
                     <button class="sw-span-btn ${rows.pgm ? "active-pgm" : ""}" data-bus-row-toggle="${blockKey}" data-bus-row-kind="pgm">PGM</button>
                     <button class="sw-span-btn ${rows.pvw ? "active-pvw" : ""}" data-bus-row-toggle="${blockKey}" data-bus-row-kind="pvw">PVW</button>
@@ -946,59 +1293,135 @@ const ViewSwitcher = (() => {
 
     function blockShell(blockKey, title, rightHtml, bodyHtml) {
         const activeLayout = getActiveLayout();
-        const isLocked = !!activeLayout.locked;
+        const { isGridLocked, isLayoutLocked } = getEffectiveLocks(activeLayout);
         const parsed = parseBlockKey(blockKey);
-        const rect = clampRect(activeLayout.rects[blockKey], getDefaultRectForKey(blockKey));
+        const rect = clampRect(activeLayout.rects[blockKey], getDefaultRectForKey(blockKey), blockKey);
         const orient = activeLayout.orientations[blockKey] || getDefaultOrientForKey(blockKey);
         const isOrientable = ORIENTABLE_TYPES.has(parsed.type);
         const isScalable = SCALABLE_TYPES.has(parsed.type);
         const panelScale = activeLayout.panelScales?.[blockKey] || activeLayout.buttonScale || "md";
-        const isCompactHead = rect.span <= 3;
-        const spanPresets = [
-            [3, "¼"],
-            [4, "⅓"],
-            [6, "½"],
-            [8, "⅔"],
-            [12, "Full"]
+        const minSpan = getMinSpanForKey(blockKey);
+        const isCompactHead = rect.span <= 6 || rect.rowSpan === 1;
+        const isFilterable = FILTERABLE_TYPES.has(parsed.type);
+        const hasHiddenItems = Array.isArray(activeLayout.itemFilters?.[blockKey]) && activeLayout.itemFilters[blockKey].length > 0;
+        const isFilterOpen = openPanelFilter.has(blockKey);
+        const isMenuOpen = openPanelMenu === blockKey;
+        const hasRight = Boolean(rightHtml && rightHtml.trim());
+        const hasAnyOptions = hasRight || !isGridLocked;
+        const showTinyTileOnly = rect.span <= 2 && rect.rowSpan === 1 && isGridLocked && !hasRight;
+        const underRegionHead = isBlockUnderRegionHeader(rect, activeLayout.regions || []);
+        const allSpanPresets = [
+            [1, "1c"],
+            [2, "2c"],
+            [4, "⅙"],
+            [6, "¼"],
+            [8, "⅓"],
+            [12, "½"],
+            [16, "⅔"],
+            [24, "Full"]
         ];
+        const spanPresets = allSpanPresets.filter(([cols]) => cols >= minSpan);
+        const blockCls = [
+            `sw-block`,
+            `sw-scale-${panelScale}`,
+            rect.span <= 2 ? "sw-col-1" : "",
+            rect.span === 1 ? "sw-col-micro" : "",
+            rect.span <= 6 ? "sw-narrow" : "",
+            rect.rowSpan === 1 ? "sw-row-1" : "",
+            rect.rowSpan <= 2 ? "sw-short" : "",
+            underRegionHead ? "sw-under-reg-head" : "",
+            isGridLocked ? "sw-locked" : "",
+            isLayoutLocked ? "sw-layout-locked" : "",
+            showTinyTileOnly ? "sw-tile-pure" : "",
+            isMenuOpen ? "has-open-menu" : ""
+        ].filter(Boolean).join(" ");
+
+        const scaleBtnsHtml = isScalable ? `
+            <div class="sw-span-seg" title="Button size for this panel">
+                ${[["sm","S"],["md","M"],["lg","L"]].map(([sv, sl]) => `
+                    <button class="sw-span-btn ${panelScale === sv ? "active" : ""}" data-bscale-blk="${blockKey}" data-bscale-val="${sv}">${sl}</button>
+                `).join("")}
+            </div>
+        ` : "";
+        const orientBtnHtml = isOrientable ? `
+            <button class="btn btn-xs btn-ghost" data-orient-blk="${blockKey}" title="Toggle Horizontal (H) / Vertical (V) layout">
+                ${orient === "col" ? "⇅ V" : "⇄ H"}
+            </button>
+        ` : "";
+        const filterBtnHtml = isFilterable ? `
+            <button class="btn btn-xs ${isFilterOpen || hasHiddenItems ? "btn-accent-soft" : "btn-ghost"}" data-filter-blk="${blockKey}" title="Show/Hide individual items in this panel">⚙ Filter</button>
+        ` : "";
+        const spanSegHtml = `
+            <div class="sw-span-seg" title="Panel width (24-col grid, min ${minSpan}c)">
+                ${spanPresets.map(([cols, lbl]) => `
+                    <button class="sw-span-btn ${rect.span === cols ? "active" : ""}" data-span-blk="${blockKey}" data-span-val="${cols}">${lbl}</button>
+                `).join("")}
+            </div>
+        `;
+        const dupBtnHtml = `<button class="btn btn-xs btn-ghost" data-dup-blk="${blockKey}" title="Duplicate this panel">⧉</button>`;
+        const hideBtnHtml = `<button class="btn btn-xs btn-ghost" data-hide-blk="${blockKey}" title="${parsed.isExtra ? "Remove duplicate panel" : "Hide panel"}">✕</button>`;
+
+        const menuPopoverHtml = (isCompactHead && isMenuOpen && hasAnyOptions) ? `
+            <div class="sw-blk-menu-pop ${rect.col <= 6 ? "menu-align-left" : ""}" role="menu">
+                ${hasRight ? `
+                    <div class="sw-blk-menu-sec">
+                        <span class="section-label">Options</span>
+                        <div class="sw-blk-menu-row">${rightHtml}</div>
+                    </div>
+                ` : ""}
+                ${(!isGridLocked && !isLayoutLocked && (isScalable || isOrientable)) ? `
+                    <div class="sw-blk-menu-sec">
+                        <span class="section-label">Appearance</span>
+                        <div class="sw-blk-menu-row">${scaleBtnsHtml}${orientBtnHtml}</div>
+                    </div>
+                ` : ""}
+                ${!isGridLocked ? `
+                    <div class="sw-blk-menu-sec">
+                        <span class="section-label">Width</span>
+                        <div class="sw-blk-menu-row">${spanSegHtml}</div>
+                    </div>
+                    <div class="sw-blk-menu-sec">
+                        <span class="section-label">Panel</span>
+                        <div class="sw-blk-menu-row">
+                            ${!isLayoutLocked ? filterBtnHtml : ""}
+                            ${dupBtnHtml}
+                            ${hideBtnHtml}
+                        </div>
+                    </div>
+                ` : ""}
+            </div>
+        ` : "";
 
         return `
-            <section class="sw-block sw-scale-${panelScale} ${rect.span <= 3 ? "sw-narrow" : ""} ${isLocked ? "sw-locked" : ""}" data-block-id="${blockKey}" style="grid-column:${rect.col} / span ${rect.span}; grid-row:${rect.row} / span ${rect.rowSpan};">
-                <div class="sw-block-head" ${!isLocked ? `data-drag-head="${blockKey}"` : ""}>
-                    <div class="field-row" style="gap:5px; flex-wrap:wrap; min-width:0;">
-                        ${!isLocked ? `<span class="sw-drag-grip" title="Drag anywhere on the grid (leave blank space between panels)">⋮⋮</span>` : ""}
-                        <span class="section-label">${title}</span>
-                        ${rightHtml || ""}
-                    </div>
-                    ${!isLocked ? `
-                        <div class="field-row" style="gap:3px; flex-shrink:0;">
-                            ${isScalable ? `
-                                <div class="sw-span-seg" title="Button size for this panel">
-                                    ${[["sm","S"],["md","M"],["lg","L"]].map(([sv, sl]) => `
-                                        <button class="sw-span-btn ${panelScale === sv ? "active" : ""}" data-bscale-blk="${blockKey}" data-bscale-val="${sv}">${sl}</button>
-                                    `).join("")}
-                                </div>
-                            ` : ""}
-                            ${isOrientable ? `
-                                <button class="btn btn-xs btn-ghost" data-orient-blk="${blockKey}" title="Toggle Horizontal (H) / Vertical (V) layout">
-                                    ${orient === "col" ? "⇅ V" : "⇄ H"}
-                                </button>
-                            ` : ""}
-                            ${!isCompactHead ? `
-                                <div class="sw-span-seg" title="Panel width (or drag right edge down to 2 cols)">
-                                    ${spanPresets.map(([cols, lbl]) => `
-                                        <button class="sw-span-btn ${rect.span === cols ? "active" : ""}" data-span-blk="${blockKey}" data-span-val="${cols}">${lbl}</button>
-                                    `).join("")}
-                                </div>
-                            ` : ""}
-                            <button class="btn btn-xs btn-ghost" data-hide-blk="${blockKey}" title="${parsed.isExtra ? "Remove panel" : "Hide panel"}">✕</button>
+            <section class="${blockCls}" data-block-id="${blockKey}" style="grid-column:${rect.col} / span ${rect.span}; grid-row:${rect.row} / span ${rect.rowSpan};">
+                ${!showTinyTileOnly ? `
+                    <div class="sw-block-head" ${!isGridLocked ? `data-drag-head="${blockKey}"` : ""}>
+                        <div class="field-row" style="gap:5px; flex-wrap:${isCompactHead ? "nowrap" : "wrap"}; min-width:0; flex:1;">
+                            ${!isGridLocked ? `<span class="sw-drag-grip" title="Drag anywhere on the grid (leave blank space between panels)">⋮⋮</span>` : ""}
+                            <span class="section-label" style="${isCompactHead ? "overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" : ""}">${title}</span>
+                            ${!isCompactHead ? (rightHtml || "") : ""}
                         </div>
-                    ` : ""}
-                </div>
+                        ${isCompactHead ? `
+                            ${hasAnyOptions ? `
+                                <button type="button" class="btn btn-xs ${isMenuOpen ? "btn-accent-soft" : "btn-ghost"} sw-blk-menu-btn" data-blk-menu="${blockKey}" title="Panel options &amp; layout menu">⋯</button>
+                            ` : ""}
+                        ` : `
+                            ${!isGridLocked ? `
+                                <div class="field-row" style="gap:3px; flex-shrink:0;">
+                                    ${!isLayoutLocked ? `${scaleBtnsHtml}${orientBtnHtml}${isFilterable ? `<button class="btn btn-xs ${isFilterOpen || hasHiddenItems ? "btn-accent-soft" : "btn-ghost"}" data-filter-blk="${blockKey}" title="Show/Hide individual items in this panel">⚙</button>` : ""}` : ""}
+                                    ${dupBtnHtml}
+                                    ${spanSegHtml}
+                                    ${hideBtnHtml}
+                                </div>
+                            ` : ""}
+                        `}
+                    </div>
+                ` : ""}
+                ${menuPopoverHtml}
                 <div class="sw-block-body">${bodyHtml}</div>
-                ${!isLocked ? `
-                    <div class="sw-resize-bar" data-resize-blk="${blockKey}" title="Drag to scale height in grid rows"></div>
-                    <div class="sw-resize-right" data-resize-w-blk="${blockKey}" title="Drag to scale width (2–12 cols)"></div>
+                ${!isGridLocked ? `
+                    <div class="sw-resize-bar" data-resize-blk="${blockKey}" title="Drag to scale height (1+ rows)"></div>
+                    <div class="sw-resize-right" data-resize-w-blk="${blockKey}" title="Drag to scale width (${minSpan}–24 cols)"></div>
                     <div class="sw-resize-corner" data-resize-both-blk="${blockKey}" title="Drag corner to scale both width & height"></div>
                 ` : ""}
             </section>
@@ -1008,7 +1431,8 @@ const ViewSwitcher = (() => {
     function renderBlockHtml(blockKey, fallbackMeWs) {
         const esc = AppUI.esc;
         const activeLayout = getActiveLayout();
-        const isLocked = !!activeLayout.locked;
+        const { isGridLocked, isLayoutLocked } = getEffectiveLocks(activeLayout);
+        const isLocked = isGridLocked || isLayoutLocked;
         const parsed = parseBlockKey(blockKey);
         const type = parsed.type;
         const meWs = parsed.meIndex !== null ? getActiveMEWorkspace(parsed.meIndex) : fallbackMeWs;
@@ -1017,31 +1441,43 @@ const ViewSwitcher = (() => {
         const profile = getProfile() || {};
         const maxUsks = getUpstreamKeyersPerME(profile);
         const orient = activeLayout.orientations[blockKey] || getDefaultOrientForKey(blockKey);
+        const panelScale = activeLayout.panelScales?.[blockKey] || activeLayout.buttonScale || "md";
+        const isSm = panelScale === "sm";
         const hasBusMap = typeof supportsBusMapping === "function" ? supportsBusMapping(profile) : false;
         const meAttr = `data-me-id="${meWs.resourceId}"`;
+        const filterBarHtml = renderItemFilterBarHtml(activeLayout, blockKey, type, meWs, maxUsks, profile);
 
         if (type === "monitors") {
             const vertical = orient === "col";
+            const showPvw = isItemVisible(activeLayout, blockKey, "pvw");
+            const showPgm = isItemVisible(activeLayout, blockKey, "pgm");
+            const monCount = (showPvw ? 1 : 0) + (showPgm ? 1 : 0);
             const body = `
-                <div class="monitors-row ${vertical ? "is-vertical" : ""}" style="height:100%;">
-                    <div class="monitor-card pvw" style="height:100%;">
-                        <div class="monitor-head">
-                            <span class="badge green">${esc(meWs.name)} · PVW</span>
-                            <span class="mono">${esc(getSourceDisplayName(d.previewSource))}</span>
+                ${filterBarHtml}
+                <div class="monitors-row ${vertical ? "is-vertical" : ""} ${monCount === 1 ? "single-monitor" : ""}" style="height:100%;">
+                    ${showPvw ? `
+                        <div class="monitor-card pvw" style="height:100%;">
+                            <div class="monitor-head">
+                                <span class="badge green">${esc(meWs.name)} · PVW</span>
+                                <span class="mono">${esc(getSourceDisplayName(d.previewSource))}</span>
+                            </div>
+                            <div class="monitor-canvas-wrap" style="max-height:none; flex:1; min-height:0;">
+                                <canvas data-sw-canvas="pvw" data-sw-me="${meWs.resourceId}" width="960" height="540"></canvas>
+                            </div>
                         </div>
-                        <div class="monitor-canvas-wrap" style="max-height:none; flex:1; min-height:0;">
-                            <canvas data-sw-canvas="pvw" data-sw-me="${meWs.resourceId}" width="960" height="540"></canvas>
+                    ` : ""}
+                    ${showPgm ? `
+                        <div class="monitor-card pgm" style="height:100%;">
+                            <div class="monitor-head">
+                                <span class="badge red">${esc(meWs.name)} · PGM ${d.ftb?.enabled ? "· FTB" : ""}</span>
+                                <span class="mono">${esc(getSourceDisplayName(d.source))}</span>
+                            </div>
+                            <div class="monitor-canvas-wrap" style="max-height:none; flex:1; min-height:0;">
+                                <canvas data-sw-canvas="pgm" data-sw-me="${meWs.resourceId}" width="960" height="540"></canvas>
+                            </div>
                         </div>
-                    </div>
-                    <div class="monitor-card pgm" style="height:100%;">
-                        <div class="monitor-head">
-                            <span class="badge red">${esc(meWs.name)} · PGM ${d.ftb?.enabled ? "· FTB" : ""}</span>
-                            <span class="mono">${esc(getSourceDisplayName(d.source))}</span>
-                        </div>
-                        <div class="monitor-canvas-wrap" style="max-height:none; flex:1; min-height:0;">
-                            <canvas data-sw-canvas="pgm" data-sw-me="${meWs.resourceId}" width="960" height="540"></canvas>
-                        </div>
-                    </div>
+                    ` : ""}
+                    ${!monCount ? `<div class="muted" style="font-size:11px;">Both monitors hidden — click ⚙ to show PVW or PGM.</div>` : ""}
                 </div>
             `;
             return blockShell(blockKey, `${esc(meWs.name)} Monitors`, "", body);
@@ -1098,12 +1534,12 @@ const ViewSwitcher = (() => {
             const isArmed = armedKeys.includes(`me:${meWs.resourceId}`);
 
             const rightHtml = `
-                ${switcherTabMode === "custom" ? `
+                ${(switcherTabMode === "custom" && !isLayoutLocked) ? `
                     <button class="btn btn-xs ${isArmed ? "btn-amber solid" : ""}" data-toggle-shortcut-key="me:${meWs.resourceId}" title="Arm/disarm ${esc(meWs.name)} for Space (CUT) / Enter (AUTO)">
                         ⌨ ${isArmed ? "Keys" : "Off"}
                     </button>
                 ` : ""}
-                ${!isLocked ? `
+                ${(!isGridLocked && !isLayoutLocked) ? `
                     <div class="sw-span-seg" title="Show/Hide Transition panel sections">
                         <button class="sw-span-btn ${sec.style ? "active" : ""}" data-trans-sec-blk="${blockKey}" data-trans-sec-name="style">Style</button>
                         <button class="sw-span-btn ${sec.next ? "active" : ""}" data-trans-sec-blk="${blockKey}" data-trans-sec-name="next">Next</button>
@@ -1114,54 +1550,80 @@ const ViewSwitcher = (() => {
 
             const groups = [];
             if (sec.style) {
+                const subO = getSubOrientation(activeLayout, blockKey, "style", "row");
                 groups.push(`
                     <div class="trans-group">
-                        <span class="section-label">Style & Rate</span>
-                        <div class="field-row" style="gap:5px; flex-wrap:wrap;">
-                            <div class="seg">
-                                ${["Mix", "Dip", "Wipe", "DVE"].map(st => `<button class="seg-item ${d.transitionStyle === st ? "active" : ""}" data-tstyle="${st}" ${meAttr}>${st}</button>`).join("")}
-                            </div>
-                            ${renderInlineTransParamHtml(meWs)}
+                        <div class="sw-sub-hdr">
+                            <span class="section-label">Style & Rate</span>
+                            ${renderSubOrientBtn(blockKey, "style", subO)}
                         </div>
-                        <div class="field-row" style="gap:5px; flex-wrap:wrap;">
-                            <button class="btn btn-xs ${d.previewTransition ? "btn-amber solid" : ""}" data-sw-prev-trans ${meAttr}>PREV</button>
-                            <div class="field-row" style="gap:3px;">
-                                <input type="number" data-sw-rate ${meAttr} min="1" max="250" value="${d.transitionRate || 25}" style="width:52px; padding:3px 5px; font-size:11px;" title="Transition Rate (Frames)">
-                                <span class="muted" style="font-size:10px;">f</span>
+                        <div class="trans-style-wrap is-${subO}">
+                            <div class="field-row" style="gap:5px; flex-wrap:wrap;">
+                                <div class="seg">
+                                    ${["Mix", "Dip", "Wipe", "DVE"].map(st => `<button class="seg-item ${d.transitionStyle === st ? "active" : ""}" data-tstyle="${st}" ${meAttr}>${st}</button>`).join("")}
+                                </div>
+                                ${renderInlineTransParamHtml(meWs)}
+                            </div>
+                            <div class="field-row trans-rate-row" style="gap:5px; flex-wrap:wrap;">
+                                <button class="btn btn-xs ${d.previewTransition ? "btn-amber solid" : ""}" data-sw-prev-trans ${meAttr} title="Preview Transition">${isSm ? "PRV" : "PREV"}</button>
+                                <div class="field-row" style="gap:3px;">
+                                    <input type="number" data-sw-rate ${meAttr} min="1" max="250" value="${d.transitionRate || 25}" style="width:${isSm ? "42px" : "52px"}; padding:3px 5px; font-size:${isSm ? "10px" : "11px"};" title="Transition Rate (Frames)">
+                                    <span class="muted" style="font-size:10px;">f</span>
+                                </div>
                             </div>
                         </div>
                     </div>
                 `);
             }
             if (sec.next) {
-                groups.push(`
-                    <div class="trans-group">
-                        <span class="section-label">Next Trans</span>
-                        <div class="field-row" style="gap:4px; flex-wrap:wrap;">
-                            <button class="btn btn-xs ${d.nextTransition?.bkgd ? "btn-amber" : ""}" data-nt="bkgd" ${meAttr}>BKGD</button>
-                            ${Array.from({ length: maxUsks }, (_, i) => `
-                                <button class="btn btn-xs ${d.nextTransition?.usk?.[i] ? "btn-amber" : ""}" data-nt="${i}" ${meAttr}>K${i + 1}${d.usk?.[i]?.enabled ? " ●" : ""}</button>
-                            `).join("")}
+                const subO = getSubOrientation(activeLayout, blockKey, "next", "row");
+                const showBkgd = isItemVisible(activeLayout, blockKey, "bkgd");
+                const visKeys = Array.from({ length: maxUsks }, (_, i) => i).filter(i => isItemVisible(activeLayout, blockKey, `k${i}`));
+                if (showBkgd || visKeys.length) {
+                    groups.push(`
+                        <div class="trans-group">
+                            <div class="sw-sub-hdr">
+                                <span class="section-label">Next Trans</span>
+                                ${renderSubOrientBtn(blockKey, "next", subO)}
+                            </div>
+                            <div class="sw-sub-items is-${subO}">
+                                ${showBkgd ? `<button class="btn btn-xs ${d.nextTransition?.bkgd ? "btn-amber" : ""}" data-nt="bkgd" ${meAttr} title="Background Next Transition">${isSm ? "BG" : "BKGD"}</button>` : ""}
+                                ${visKeys.map(i => `
+                                    <button class="btn btn-xs ${d.nextTransition?.usk?.[i] ? "btn-amber" : ""}" data-nt="${i}" ${meAttr} title="USK ${i + 1} Next Transition">K${i + 1}${d.usk?.[i]?.enabled ? "●" : ""}</button>
+                                `).join("")}
+                            </div>
                         </div>
-                    </div>
-                `);
+                    `);
+                }
             }
             if (sec.take) {
-                groups.push(`
-                    <div class="trans-group trans-group-actions">
-                        <span class="section-label">Take</span>
-                        <div class="trans-action-btns">
-                            <button class="btn btn-pgm solid" data-sw-cut ${meAttr}>CUT</button>
-                            <button class="btn btn-amber solid" data-sw-auto ${meAttr}>AUTO</button>
-                            <button class="btn ${d.ftb?.enabled ? "btn-pgm solid" : ""}" data-sw-ftb ${meAttr}>FTB</button>
+                const subO = getSubOrientation(activeLayout, blockKey, "take", "row");
+                const showCut = isItemVisible(activeLayout, blockKey, "cut");
+                const showAuto = isItemVisible(activeLayout, blockKey, "auto");
+                const showFtb = isItemVisible(activeLayout, blockKey, "ftb");
+                if (showCut || showAuto || showFtb) {
+                    groups.push(`
+                        <div class="trans-group trans-group-actions">
+                            <div class="sw-sub-hdr">
+                                <span class="section-label">Take</span>
+                                ${renderSubOrientBtn(blockKey, "take", subO)}
+                            </div>
+                            <div class="trans-action-btns is-${subO}">
+                                ${showCut ? `<button class="btn btn-pgm solid" data-sw-cut ${meAttr} title="Cut Transition">CUT</button>` : ""}
+                                ${showAuto ? `<button class="btn ${(d._hwInTransition || (d.transitionProgress || 0) > 0) ? "btn-pgm solid" : "btn-amber solid"}" data-sw-auto ${meAttr} title="Auto Transition">${isSm ? "AUT" : "AUTO"}</button>` : ""}
+                                ${showFtb ? `<button class="btn ${d.ftb?.enabled ? "btn-pgm solid" : ""}" data-sw-ftb ${meAttr} title="Fade to Black">FTB</button>` : ""}
+                            </div>
                         </div>
-                    </div>
-                `);
+                    `);
+                }
             }
 
-            const body = groups.length
-                ? `<div class="trans-groups-grid ${isHorizontal ? "is-horizontal" : "is-vertical"}" style="${isHorizontal ? `grid-template-columns:repeat(${groups.length}, minmax(0, auto));` : ""}">${groups.join("")}</div>`
-                : `<div class="muted" style="font-size:11px;">All sections hidden — unlock layout to toggle Style, Next, or Take.</div>`;
+            const body = `
+                ${filterBarHtml}
+                ${groups.length
+                    ? `<div class="trans-groups-grid ${isHorizontal ? "is-horizontal" : "is-vertical"}" style="${isHorizontal ? `grid-template-columns:repeat(${groups.length}, minmax(0, auto));` : ""}">${groups.join("")}</div>`
+                    : `<div class="muted" style="font-size:11px;">All sections hidden — unlock layout to toggle Style, Next, or Take.</div>`}
+            `;
 
             return blockShell(blockKey, `${esc(meWs.name)} Transition`, rightHtml, body);
         }
@@ -1191,9 +1653,11 @@ const ViewSwitcher = (() => {
                 : `<span class="muted" style="font-size:10px;">No targets</span>`;
 
             const rightHtml = `
-                <button class="btn btn-xs ${isPickerOpen ? "btn-accent-soft" : ""}" data-mt-toggle-cfg="${blockKey}" title="Assign M/Es and/or Aux outputs to this Multi Transition panel">⚙ Targets (${targets.length})</button>
-                <button class="btn btn-xs ${isArmed ? "btn-amber solid" : ""}" data-toggle-shortcut-key="multi:${blockKey}" title="Arm/disarm Space (CUT) & Enter (AUTO) for this Multi Transition panel">⌨ ${isArmed ? "Keys" : "Off"}</button>
-                ${!isLocked ? `
+                ${!isLayoutLocked ? `
+                    <button class="btn btn-xs ${isPickerOpen ? "btn-accent-soft" : ""}" data-mt-toggle-cfg="${blockKey}" title="Assign M/Es and/or Aux outputs to this Multi Transition panel">⚙ Targets (${targets.length})</button>
+                    <button class="btn btn-xs ${isArmed ? "btn-amber solid" : ""}" data-toggle-shortcut-key="multi:${blockKey}" title="Arm/disarm Space (CUT) & Enter (AUTO) for this Multi Transition panel">⌨ ${isArmed ? "Keys" : "Off"}</button>
+                ` : ""}
+                ${(!isGridLocked && !isLayoutLocked) ? `
                     <div class="sw-span-seg" title="Show/Hide Multi Transition sections">
                         <button class="sw-span-btn ${sec.targets ? "active" : ""}" data-trans-sec-blk="${blockKey}" data-trans-sec-name="targets">List</button>
                         <button class="sw-span-btn ${sec.style ? "active" : ""}" data-trans-sec-blk="${blockKey}" data-trans-sec-name="style">Style</button>
@@ -1222,40 +1686,60 @@ const ViewSwitcher = (() => {
 
             const groups = [];
             if (sec.targets) {
+                const subO = getSubOrientation(activeLayout, blockKey, "targets", "row");
                 groups.push(`
                     <div class="trans-group">
-                        <span class="section-label">Assigned</span>
-                        <div class="field-row" style="gap:4px; flex-wrap:wrap;">${targetBadgesHtml}</div>
+                        <div class="sw-sub-hdr">
+                            <span class="section-label">Assigned</span>
+                            ${renderSubOrientBtn(blockKey, "targets", subO)}
+                        </div>
+                        <div class="sw-sub-items is-${subO}">${targetBadgesHtml}</div>
                     </div>
                 `);
             }
             if (sec.style && hasAnyMe) {
+                const subO = getSubOrientation(activeLayout, blockKey, "style", "row");
                 groups.push(`
                     <div class="trans-group">
-                        <span class="section-label">M/E Style & Rate</span>
-                        <div class="field-row" style="gap:4px; flex-wrap:wrap;">
-                            <div class="seg">
-                                ${["Mix", "Dip", "Wipe", "DVE"].map(st => `<button class="seg-item ${leadData.transitionStyle === st ? "active" : ""}" data-mt-style="${st}" data-mt-blk="${blockKey}">${st}</button>`).join("")}
+                        <div class="sw-sub-hdr">
+                            <span class="section-label">M/E Style & Rate</span>
+                            ${renderSubOrientBtn(blockKey, "style", subO)}
+                        </div>
+                        <div class="trans-style-wrap is-${subO}">
+                            <div class="field-row" style="gap:4px; flex-wrap:wrap;">
+                                <div class="seg">
+                                    ${["Mix", "Dip", "Wipe", "DVE"].map(st => `<button class="seg-item ${leadData.transitionStyle === st ? "active" : ""}" data-mt-style="${st}" data-mt-blk="${blockKey}">${st}</button>`).join("")}
+                                </div>
+                                <input type="number" data-mt-rate="${blockKey}" min="1" max="250" value="${leadData.transitionRate || 25}" style="width:${isSm ? "42px" : "50px"}; padding:3px 5px; font-size:${isSm ? "10px" : "11px"};" title="Set rate on all assigned M/Es">
                             </div>
-                            <input type="number" data-mt-rate="${blockKey}" min="1" max="250" value="${leadData.transitionRate || 25}" style="width:50px; padding:3px 5px; font-size:11px;" title="Set rate on all assigned M/Es">
                         </div>
                     </div>
                 `);
             }
             if (sec.take) {
-                groups.push(`
-                    <div class="trans-group trans-group-actions">
-                        <span class="section-label">Gang Take</span>
-                        <div class="trans-action-btns">
-                            <button class="btn btn-pgm solid" data-mt-act="cut" data-mt-blk="${blockKey}" ${targets.length ? "" : "disabled"}>CUT ALL</button>
-                            <button class="btn btn-amber solid" data-mt-act="auto" data-mt-blk="${blockKey}" ${targets.length ? "" : "disabled"}>AUTO ALL</button>
-                            ${hasAnyMe ? `<button class="btn ${leadData.ftb?.enabled ? "btn-pgm solid" : ""}" data-mt-act="ftb" data-mt-blk="${blockKey}">FTB</button>` : ""}
+                const subO = getSubOrientation(activeLayout, blockKey, "take", "row");
+                const showCut = isItemVisible(activeLayout, blockKey, "cut");
+                const showAuto = isItemVisible(activeLayout, blockKey, "auto");
+                const showFtb = hasAnyMe && isItemVisible(activeLayout, blockKey, "ftb");
+                if (showCut || showAuto || showFtb) {
+                    groups.push(`
+                        <div class="trans-group trans-group-actions">
+                            <div class="sw-sub-hdr">
+                                <span class="section-label">Gang Take</span>
+                                ${renderSubOrientBtn(blockKey, "take", subO)}
+                            </div>
+                            <div class="trans-action-btns is-${subO}">
+                                ${showCut ? `<button class="btn btn-pgm solid" data-mt-act="cut" data-mt-blk="${blockKey}" ${targets.length ? "" : "disabled"} title="Cut all assigned targets">${isSm ? "CUT" : "CUT ALL"}</button>` : ""}
+                                ${showAuto ? `<button class="btn btn-amber solid" data-mt-act="auto" data-mt-blk="${blockKey}" ${targets.length ? "" : "disabled"} title="Auto-transition all assigned targets">${isSm ? "AUT" : "AUTO ALL"}</button>` : ""}
+                                ${showFtb ? `<button class="btn ${leadData.ftb?.enabled ? "btn-pgm solid" : ""}" data-mt-act="ftb" data-mt-blk="${blockKey}" title="Fade to Black on all assigned M/Es">FTB</button>` : ""}
+                            </div>
                         </div>
-                    </div>
-                `);
+                    `);
+                }
             }
 
             const body = `
+                ${filterBarHtml}
                 ${pickerHtml}
                 ${groups.length
                     ? `<div class="trans-groups-grid ${isHorizontal ? "is-horizontal" : "is-vertical"}" style="${isHorizontal ? `grid-template-columns:repeat(${groups.length}, minmax(0, auto));` : ""}">${groups.join("")}</div>`
@@ -1265,25 +1749,35 @@ const ViewSwitcher = (() => {
         }
 
         if (type === "dsk") {
-            const dsks = getAvailableDSKs();
+            const dsks = getAvailableDSKs().filter(dsk => isItemVisible(activeLayout, blockKey, `dsk_${dsk.id}`));
             const isHorizontal = orient !== "col";
-            const rightHtml = `<button class="btn btn-xs btn-ghost" data-sw-edit-dsk>Configure →</button>`;
+            const rightHtml = !isLayoutLocked ? `<button class="btn btn-xs btn-ghost" data-sw-edit-dsk>Configure →</button>` : "";
             const body = `
-                <div class="dsk-row-list ${isHorizontal ? "is-horizontal" : "is-vertical"}">
-                    ${dsks.map(dsk => `
-                        <div class="dsk-mini-card ${dsk.enabled ? "on-air" : ""}">
-                            <div class="field-row" style="justify-content:space-between; gap:4px;">
-                                <strong style="font-size:12px;">DSK ${dsk.id + 1}</strong>
-                                <span class="mono muted" style="font-size:10px;">${esc(getSourceShortName(dsk.source))}</span>
+                ${filterBarHtml}
+                ${dsks.length ? `
+                    <div class="dsk-row-list ${isHorizontal ? "is-horizontal" : "is-vertical"}">
+                        ${dsks.map(dsk => {
+                            const subName = `dsk_${dsk.id}`;
+                            const subO = getSubOrientation(activeLayout, blockKey, subName, "row");
+                            return `
+                            <div class="dsk-mini-card ${dsk.enabled ? "on-air" : ""}">
+                                <div class="field-row" style="justify-content:space-between; gap:4px;">
+                                    <strong style="font-size:${isSm ? "11px" : "12px"};">DSK ${dsk.id + 1}</strong>
+                                    <div class="field-row" style="gap:3px;">
+                                        <span class="mono muted" style="font-size:${isSm ? "9px" : "10px"};">${esc(getSourceShortName(dsk.source))}</span>
+                                        ${renderSubOrientBtn(blockKey, subName, subO)}
+                                    </div>
+                                </div>
+                                <div class="dsk-card-btns is-${subO}">
+                                    <button class="btn btn-xs ${dsk.enabled ? "btn-pgm solid" : ""}" data-dsk-air="${dsk.id}" style="flex:1;" title="DSK ${dsk.id + 1} On Air">${isSm ? "AIR" : "ON AIR"}</button>
+                                    <button class="btn btn-xs btn-amber" data-dsk-auto="${dsk.id}" title="DSK ${dsk.id + 1} Auto Transition">${isSm ? "AUT" : "AUTO"}</button>
+                                    <button class="btn btn-xs ${dsk.tie ? "btn-accent-soft" : ""}" data-dsk-tie="${dsk.id}" title="DSK ${dsk.id + 1} Tie">TIE</button>
+                                </div>
                             </div>
-                            <div class="field-row" style="gap:4px; flex-wrap:wrap;">
-                                <button class="btn btn-xs ${dsk.enabled ? "btn-pgm solid" : ""}" data-dsk-air="${dsk.id}" style="flex:1;">ON AIR</button>
-                                <button class="btn btn-xs btn-amber" data-dsk-auto="${dsk.id}">AUTO</button>
-                                <button class="btn btn-xs ${dsk.tie ? "btn-accent-soft" : ""}" data-dsk-tie="${dsk.id}">TIE</button>
-                            </div>
-                        </div>
-                    `).join("")}
-                </div>
+                            `;
+                        }).join("")}
+                    </div>
+                ` : `<div class="muted" style="font-size:11px;">All DSKs hidden — click ⚙ to show items.</div>`}
             `;
             return blockShell(blockKey, "Downstream Keyers", rightHtml, body);
         }
@@ -1360,37 +1854,41 @@ const ViewSwitcher = (() => {
             if (!ssList.length) {
                 return blockShell(blockKey, "SuperSource Layouts", "", `<div class="muted" style="font-size:12px;">No SuperSource available on this ATEM model.</div>`);
             }
-            if (presetSSIndex >= ssList.length) presetSSIndex = 0;
-            const activeSS = ssList[presetSSIndex];
+            let curSSIdx = activeLayout.panelState?.[blockKey]?.ssIndex ?? presetSSIndex;
+            if (curSSIdx >= ssList.length) curSSIdx = 0;
+            const activeSS = ssList[curSSIdx];
             const presets = ShowTemplates.getAllSSPresets();
             const animCfg = typeof SwitcherEngine?.getSSAnimSettings === "function"
                 ? SwitcherEngine.getSSAnimSettings()
                 : { enabled: false, durationMs: 600, easing: "easeInOut", offBoxMode: "shrink" };
+            const primary = !parsed.isExtra;
 
             const rightHtml = `
                 ${ssList.length > 1 ? `
                     <div class="seg">
-                        ${ssList.map((ss, idx) => `<button class="seg-item ${idx === presetSSIndex ? "active" : ""}" data-sw-ss-idx="${idx}">${esc(ss.name)}</button>`).join("")}
+                        ${ssList.map((ss, idx) => `<button class="seg-item ${idx === curSSIdx ? "active" : ""}" data-sw-ss-idx="${idx}" data-sw-ss-blk="${blockKey}">${esc(ss.name)}</button>`).join("")}
                     </div>
                 ` : `<span class="badge cyan">${esc(activeSS.name)}</span>`}
-                <button class="btn btn-xs ${animCfg.enabled ? "btn-accent-soft" : ""}" id="btnSwSSAnimToggle" title="Toggle Cut vs Merge Animate on SuperSource presets">${animCfg.enabled ? "✨ Anim" : "Cut"}</button>
-                <button class="btn btn-xs btn-accent-soft" data-sw-save-ss-preset title="Save current ${esc(activeSS.name)} box layout as a preset">+ Save</button>
-                <button class="btn btn-xs btn-ghost" data-sw-open-compose-ss="${activeSS.id}">Compose →</button>
+                <button class="btn btn-xs ${animCfg.enabled ? "btn-accent-soft" : ""}" ${primary ? `id="btnSwSSAnimToggle"` : ""} data-sw-ss-anim-toggle title="Toggle Cut vs Merge Animate on SuperSource presets">${animCfg.enabled ? "✨ Anim" : "Cut"}</button>
+                ${!isLayoutLocked ? `
+                    <button class="btn btn-xs btn-accent-soft" data-sw-save-ss-preset="${blockKey}" title="Save current ${esc(activeSS.name)} box layout as a preset">+ Save</button>
+                    <button class="btn btn-xs btn-ghost" data-sw-open-compose-ss="${activeSS.id}">Compose →</button>
+                ` : ""}
             `;
             const animBarHtml = `
                 <div class="field-row" style="gap:6px; flex-wrap:wrap; margin-bottom:8px; padding:6px 8px; border-radius:6px; background:var(--bg-elevated); border:1px solid var(--border); font-size:11px;">
                     <span class="muted" style="font-weight:700;">Merge:</span>
-                    <select id="selSwSSAnimDur" style="width:auto; padding:2px 6px; font-size:11px;" title="Animation Duration">
+                    <select ${primary ? `id="selSwSSAnimDur"` : ""} data-sw-ss-anim-dur style="width:auto; padding:2px 6px; font-size:11px;" title="Animation Duration">
                         ${[250, 500, 600, 750, 1000, 1500, 2000].map(ms => `<option value="${ms}" ${animCfg.durationMs === ms ? "selected" : ""}>${ms >= 1000 ? `${ms / 1000}s` : `${ms}ms`}</option>`).join("")}
                     </select>
-                    <select id="selSwSSAnimEase" style="width:auto; padding:2px 6px; font-size:11px;" title="Easing Curve">
+                    <select ${primary ? `id="selSwSSAnimEase"` : ""} data-sw-ss-anim-ease style="width:auto; padding:2px 6px; font-size:11px;" title="Easing Curve">
                         <option value="easeInOut" ${animCfg.easing === "easeInOut" ? "selected" : ""}>Smooth In-Out</option>
                         <option value="easeOut" ${animCfg.easing === "easeOut" ? "selected" : ""}>Ease Out</option>
                         <option value="easeIn" ${animCfg.easing === "easeIn" ? "selected" : ""}>Ease In</option>
                         <option value="linear" ${animCfg.easing === "linear" ? "selected" : ""}>Linear</option>
                         <option value="overshoot" ${animCfg.easing === "overshoot" ? "selected" : ""}>Overshoot</option>
                     </select>
-                    <select id="selSwSSAnimOff" style="width:auto; padding:2px 6px; font-size:11px;" title="Off-Air Boxes Entry/Exit">
+                    <select ${primary ? `id="selSwSSAnimOff"` : ""} data-sw-ss-anim-off style="width:auto; padding:2px 6px; font-size:11px;" title="Off-Air Boxes Entry/Exit">
                         <option value="shrink" ${animCfg.offBoxMode === "shrink" ? "selected" : ""}>Off: Zoom (ATEM)</option>
                         <option value="slide" ${animCfg.offBoxMode === "slide" ? "selected" : ""}>Off: Slide (ATEM)</option>
                         <option value="crop" ${animCfg.offBoxMode === "crop" ? "selected" : ""}>Off: Crop (ATEM)</option>
@@ -1403,7 +1901,7 @@ const ViewSwitcher = (() => {
                 ${animBarHtml}
                 <div class="sw-ss-preset-grid">
                     ${presets.map(p => `
-                        <div class="ss-preset-card ${lastAppliedSSPresetId === p.id ? "active" : ""}" data-sw-apply-ss="${esc(p.id)}" title="Apply ${esc(p.name)} to ${esc(activeSS.name)}">
+                        <div class="ss-preset-card ${lastAppliedSSPresetId === p.id ? "active" : ""}" data-sw-apply-ss="${esc(p.id)}" data-sw-ss-blk="${blockKey}" title="Apply ${esc(p.name)} to ${esc(activeSS.name)}">
                             ${ShowTemplates.renderPresetThumbSvg(p.boxes)}
                             <span>${esc(p.name)}</span>
                         </div>
@@ -1415,11 +1913,11 @@ const ViewSwitcher = (() => {
 
         if (type === "aux") {
             const auxCount = profile.assignableOutputs || 0;
+            const visibleAux = Array.from({ length: auxCount }, (_, i) => i + 1).filter(ch => isItemVisible(activeLayout, blockKey, `aux_${ch}`));
             const body = auxCount === 0
                 ? `<div class="muted" style="font-size:12px;">No Aux outputs on this ATEM model.</div>`
-                : `<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:8px;">
-                    ${Array.from({ length: auxCount }, (_, i) => {
-                        const ch = i + 1;
+                : `${filterBarHtml}${visibleAux.length ? `<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:8px;">
+                    ${visibleAux.map(ch => {
                         const out = getOutputData(ch);
                         const rule = hasBusMap ? SwitcherEngine.getBusFollowerForTarget("aux", ch) : null;
                         return `
@@ -1429,63 +1927,317 @@ const ViewSwitcher = (() => {
                             </div>
                         `;
                     }).join("")}
-                  </div>`;
+                  </div>` : `<div class="muted" style="font-size:11px;">All Aux outputs hidden — click ⚙ to show items.</div>`}`;
             return blockShell(blockKey, "Aux Outputs", "", body);
         }
 
         if (type === "macros") {
             MacroEngine.ensureMacroPool();
-            const start = macroBank * 10;
+            const curBank = activeLayout.panelState?.[blockKey]?.macroBank ?? macroBank;
+            const start = curBank * 10;
+            const primary = !parsed.isExtra;
             const rightHtml = `
-                <select id="swMacroBank" style="width:140px; padding:2px 6px; font-size:11px;">
-                    ${Array.from({ length: 10 }, (_, b) => `<option value="${b}" ${b === macroBank ? "selected" : ""}>Bank ${b + 1} (${b * 10 + 1}–${b * 10 + 10})</option>`).join("")}
+                <select ${primary ? `id="swMacroBank"` : ""} data-sw-macro-bank="${blockKey}" style="width:140px; padding:2px 6px; font-size:11px;">
+                    ${Array.from({ length: 10 }, (_, b) => `<option value="${b}" ${b === curBank ? "selected" : ""}>Bank ${b + 1} (${b * 10 + 1}–${b * 10 + 10})</option>`).join("")}
                 </select>
             `;
+            const visMacros = Array.from({ length: 10 }, (_, idx) => idx).filter(idx => isItemVisible(activeLayout, blockKey, `m_${idx}`));
             const body = `
-                <div class="sw-macro-grid">
-                    ${Array.from({ length: 10 }, (_, idx) => {
-                        const slot = start + idx;
-                        const m = state.macros[slot];
-                        const imp = m && typeof MacroEngine.classifyMacroImpact === "function" ? MacroEngine.classifyMacroImpact(m) : null;
-                        return `
-                            <button class="macro-pad ${m ? "" : "empty"}" data-run-macro="${slot}" ${m ? "" : "disabled"} title="${esc(imp ? imp.title : "Empty slot")}">
-                                <div class="field-row" style="justify-content:space-between; width:100%; gap:4px;">
-                                    <span class="mono muted" style="font-size:10px;">#${slot + 1}</span>
-                                    <div class="field-row" style="gap:3px;">
-                                        ${imp && imp.kind !== "empty" ? `<span class="badge ${imp.badgeClass}">${imp.icon} ${imp.shortLabel}</span>` : ""}
-                                        <span class="badge">${esc(m?.hotkey || (idx === 9 ? "Alt+0" : `Alt+${idx + 1}`))}</span>
+                ${filterBarHtml}
+                ${visMacros.length ? `
+                    <div class="sw-macro-grid">
+                        ${visMacros.map(idx => {
+                            const slot = start + idx;
+                            const m = state.macros[slot];
+                            const imp = m && typeof MacroEngine.classifyMacroImpact === "function" ? MacroEngine.classifyMacroImpact(m) : null;
+                            return `
+                                <button class="macro-pad ${m ? "" : "empty"}" data-run-macro="${slot}" ${m ? "" : "disabled"} title="${esc(imp ? imp.title : "Empty slot")}">
+                                    <div class="field-row" style="justify-content:space-between; width:100%; gap:4px;">
+                                        <span class="mono muted" style="font-size:10px;">#${slot + 1}</span>
+                                        <div class="field-row" style="gap:3px;">
+                                            ${imp && imp.kind !== "empty" ? `<span class="badge ${imp.badgeClass}">${imp.icon} ${imp.shortLabel}</span>` : ""}
+                                            <span class="badge">${esc(m?.hotkey || (idx === 9 ? "Alt+0" : `Alt+${idx + 1}`))}</span>
+                                        </div>
                                     </div>
-                                </div>
-                                <strong class="sw-macro-title">${esc(m ? m.name : "Empty")}</strong>
-                            </button>
-                        `;
-                    }).join("")}
-                </div>
+                                    <strong class="sw-macro-title">${esc(m ? m.name : "Empty")}</strong>
+                                </button>
+                            `;
+                        }).join("")}
+                    </div>
+                ` : `<div class="muted" style="font-size:11px;">All macro pads hidden — click ⚙ to show items.</div>`}
             `;
             return blockShell(blockKey, "Macro Recall Pads", rightHtml, body);
         }
 
+        if (type === "usk") {
+            const usks = (meWs.data.usk || []).slice(0, maxUsks).map((u, idx) => ({ u, idx })).filter(({ idx }) => isItemVisible(activeLayout, blockKey, `usk_${idx}`));
+            const isHorizontal = orient !== "col";
+            const nextKeys = meWs.data.nextTransition?.usk || [];
+            const rightHtml = !isLayoutLocked ? `<button class="btn btn-xs btn-ghost" data-sw-open-compose-usk="${esc(meWs.id)}">Configure →</button>` : "";
+            const title = parsed.isCustomMe ? `${esc(meWs.name)} · Upstream Keyers` : "Upstream Keyers";
+            const body = `
+                ${filterBarHtml}
+                ${usks.length ? `
+                    <div class="usk-row-list ${isHorizontal ? "is-horizontal" : "is-vertical"}">
+                        ${usks.map(({ u, idx }) => {
+                            const subName = `usk_${idx}`;
+                            const subO = getSubOrientation(activeLayout, blockKey, subName, "row");
+                            const inNext = !!nextKeys[idx];
+                            const hasKf = u.keyType === "dve" || u.flyingKey;
+                            return `
+                                <div class="usk-mini-card ${u.enabled ? "on-air" : ""}">
+                                    <div class="field-row" style="justify-content:space-between; gap:4px;">
+                                        <div class="field-row" style="gap:4px;">
+                                            <strong style="font-size:${isSm ? "10.5px" : "12px"};">KEY ${idx + 1}</strong>
+                                            <span class="badge" style="font-size:9px; padding:0 4px;">${esc((u.keyType || "luma").toUpperCase())}</span>
+                                        </div>
+                                        <div class="field-row" style="gap:3px;">
+                                            <span class="mono muted" style="font-size:${isSm ? "9px" : "10px"};">${esc(getSourceShortName(u.source))}</span>
+                                            ${renderSubOrientBtn(blockKey, subName, subO)}
+                                        </div>
+                                    </div>
+                                    <div class="usk-card-btns is-${subO}">
+                                        <button class="btn btn-xs ${u.enabled ? "btn-pgm solid" : ""}" data-usk-air="${idx}" ${meAttr} style="flex:1;" title="Toggle ${esc(meWs.name)} Key ${idx + 1} On Air">${isSm ? "AIR" : "ON AIR"}</button>
+                                        <button class="btn btn-xs ${inNext ? "btn-amber solid" : ""}" data-usk-next="${idx}" ${meAttr} title="Toggle Key ${idx + 1} in Next Transition">${isSm ? "NXT" : "NEXT"}</button>
+                                        ${hasKf ? `
+                                            <button class="btn btn-xs" data-usk-kf="${idx}" data-usk-kf-target="A" ${meAttr} title="Run Keyframe A">A</button>
+                                            <button class="btn btn-xs" data-usk-kf="${idx}" data-usk-kf-target="B" ${meAttr} title="Run Keyframe B">B</button>
+                                        ` : ""}
+                                    </div>
+                                    <select data-usk-src="${idx}" ${meAttr} style="padding:3px 5px; font-size:${isSm ? "10px" : "11px"};" title="Key ${idx + 1} Fill Source">${buildSourceOptionsHtml("usk", u.source || "", meWs)}</select>
+                                </div>
+                            `;
+                        }).join("")}
+                    </div>
+                ` : `<div class="muted" style="font-size:11px;">All USKs hidden — click ⚙ to show items.</div>`}
+            `;
+            return blockShell(blockKey, title, rightHtml, body);
+        }
+
+        if (type === "mediaPlayers") {
+            const mpCount = profile.mediaPlayers || 1;
+            const assets = Array.isArray(state.media) ? state.media : [];
+            const rect = clampRect(activeLayout.rects?.[blockKey], getDefaultRectForKey(blockKey), blockKey);
+            const showPreview = rect.span >= 6 && rect.rowSpan >= 2 && isItemVisible(activeLayout, blockKey, "preview");
+            const isHorizontal = orient !== "col";
+            const visMps = Array.from({ length: mpCount }, (_, m) => m).filter(m => isItemVisible(activeLayout, blockKey, `mp_${m}`));
+            const rightHtml = !isLayoutLocked ? `<button class="btn btn-xs btn-ghost" data-sw-open-media>Media Pool →</button>` : "";
+            const body = `
+                ${filterBarHtml}
+                ${visMps.length ? `
+                    <div class="mp-card-grid ${isHorizontal ? "is-horizontal" : "is-vertical"}">
+                        ${visMps.map(m => {
+                            const mp = state.mediaPlayers?.[m] || { id: m + 1, mediaId: null };
+                            const asset = assets.find(a => a.id === mp.mediaId);
+                            const isVid = asset?.kind === "video";
+                            const isPlaying = isVid && asset.playing === true;
+                            const subName = `mp_${m}`;
+                            const subO = getSubOrientation(activeLayout, blockKey, subName, "col");
+                            return `
+                                <div class="mp-card">
+                                    <div class="field-row" style="justify-content:space-between; gap:4px;">
+                                        <strong style="font-size:${isSm ? "10.5px" : "12px"};">MP ${m + 1}</strong>
+                                        <div class="field-row" style="gap:3px;">
+                                            <span class="badge ${asset ? (isVid ? (isPlaying ? "red" : "amber") : "cyan") : ""}" style="font-size:9px;">
+                                                ${asset ? `${isVid ? (isPlaying ? "▶ CLIP" : "CLIP") : "STILL"} #${asset.id + 1}` : "Empty"}
+                                            </span>
+                                            ${renderSubOrientBtn(blockKey, subName, subO)}
+                                        </div>
+                                    </div>
+                                    ${showPreview ? `
+                                        <div class="mp-preview-wrap">
+                                            <canvas class="mp-preview-canvas" data-sw-mp-canvas="${m}" width="240" height="135"></canvas>
+                                        </div>
+                                    ` : ""}
+                                    <div class="mp-controls is-${subO}">
+                                        <select data-sw-mp-sel="${m}" style="padding:3px 5px; font-size:${isSm ? "10px" : "11px"};" title="Select still or clip loaded in Media Player ${m + 1}">
+                                            <option value="">Empty (Placeholder)</option>
+                                            ${assets.map(a => `<option value="${a.id}" ${mp.mediaId === a.id ? "selected" : ""}>[${a.kind === "video" ? "CLIP" : "STILL"}] #${a.id + 1} — ${esc(a.name)}</option>`).join("")}
+                                        </select>
+                                        ${isVid ? `
+                                            <div class="mp-transport-row">
+                                                <button type="button" class="btn btn-xs ${isPlaying ? "btn-pvw solid" : ""}" data-sw-mp-play="${asset.id}" style="flex:1;" title="${isPlaying ? "Pause Clip" : "Play Clip"}">${isPlaying ? "⏸" : "▶"}</button>
+                                                <button type="button" class="btn btn-xs btn-pgm" data-sw-mp-stop="${asset.id}" title="Stop &amp; cue to 0:00">⏹</button>
+                                                <button type="button" class="btn btn-xs ${asset.loop !== false ? "btn-accent-soft" : ""}" data-sw-mp-loop="${asset.id}" title="Toggle Loop">${asset.loop !== false ? "🔁" : "1×"}</button>
+                                            </div>
+                                        ` : ""}
+                                    </div>
+                                </div>
+                            `;
+                        }).join("")}
+                    </div>
+                ` : `<div class="muted" style="font-size:11px;">All Media Players hidden — click ⚙ to show items.</div>`}
+            `;
+            return blockShell(blockKey, "Media Players", rightHtml, body);
+        }
+
+        if (type === "ssBoxes") {
+            const ssList = state.workspaces.filter(w => w.type === "superSource" && isWorkspaceAvailable(w));
+            if (!ssList.length) {
+                return blockShell(blockKey, "SuperSource Boxes", "", `<div class="muted" style="font-size:12px;">No SuperSource available on this ATEM model.</div>`);
+            }
+            let curSSIdx = activeLayout.panelState?.[blockKey]?.ssIndex ?? quickSSIndex;
+            if (curSSIdx >= ssList.length) curSSIdx = 0;
+            const activeSS = ssList[curSSIdx];
+            const isVertical = orient === "col";
+            const visBoxes = (activeSS.data.boxes || []).map((b, bi) => ({ b, bi })).filter(({ bi }) => isItemVisible(activeLayout, blockKey, `box_${bi}`));
+            const showArt = isItemVisible(activeLayout, blockKey, "art");
+            const rightHtml = `
+                ${ssList.length > 1 ? `
+                    <select data-q-ss-sel="${blockKey}" style="width:auto; padding:2px 6px; font-size:10px;" title="Select SuperSource">
+                        ${ssList.map((ss, idx) => `<option value="${idx}" ${idx === curSSIdx ? "selected" : ""}>${esc(ss.name)}</option>`).join("")}
+                    </select>
+                ` : `<span class="badge cyan">${esc(activeSS.name)}</span>`}
+                ${!isLayoutLocked ? `<button class="btn btn-xs btn-ghost" data-sw-open-compose-ss="${activeSS.id}">Compose →</button>` : ""}
+            `;
+            const body = `
+                ${filterBarHtml}
+                ${(visBoxes.length || showArt) ? `
+                    <div class="ssbox-grid ${isVertical ? "is-vertical" : "is-horizontal"}">
+                        ${visBoxes.map(({ b, bi }) => `
+                            <div class="field" style="padding:7px 9px; border-radius:6px; background:var(--bg-elevated); border:1px solid ${b.enabled ? "var(--pvw-border)" : "var(--border)"};">
+                                <label><span>${esc(activeSS.name)} Box ${bi + 1}</span><button class="btn btn-xs ${b.enabled ? "btn-pvw solid" : ""}" data-q-box-en="${bi}" data-ss-id="${activeSS.resourceId}">${b.enabled ? (isSm ? "ON" : "On") : (isSm ? "OFF" : "Off")}</button></label>
+                                <select data-q-box-src="${bi}" data-ss-id="${activeSS.resourceId}" style="padding:4px 6px; font-size:${isSm ? "10px" : "11px"};">${buildSourceOptionsHtml("superSourceBox", b.source || "", activeSS)}</select>
+                            </div>
+                        `).join("")}
+                        ${showArt ? `
+                            <div class="field" style="padding:7px 9px; border-radius:6px; background:var(--bg-elevated); border:1px solid var(--border);">
+                                <label><span>${esc(activeSS.name)} Art Fill</span><span class="badge">${esc(activeSS.data.artPlace || "Bg")}</span></label>
+                                <select data-ss-art-src data-ss-id="${activeSS.resourceId}" style="padding:4px 6px; font-size:${isSm ? "10px" : "11px"};">${buildSourceOptionsHtml("superSourceArt", activeSS.data.artSource || "", activeSS)}</select>
+                            </div>
+                        ` : ""}
+                    </div>
+                ` : `<div class="muted" style="font-size:11px;">All SuperSource boxes hidden — click ⚙ to show items.</div>`}
+            `;
+            return blockShell(blockKey, "SuperSource Boxes", rightHtml, body);
+        }
+
         if (type === "sources") {
             const ssList = state.workspaces.filter(w => w.type === "superSource" && isWorkspaceAvailable(w));
-            if (quickSSIndex >= ssList.length) quickSSIndex = 0;
-            const activeSS = ssList[quickSSIndex];
+            let curSSIdx = activeLayout.panelState?.[blockKey]?.ssIndex ?? quickSSIndex;
+            if (curSSIdx >= ssList.length) curSSIdx = 0;
+            const activeSS = ssList[curSSIdx];
+            const visUsks = (meWs.data.usk || []).slice(0, maxUsks).map((u, idx) => ({ u, idx })).filter(({ idx }) => isItemVisible(activeLayout, blockKey, `usk_${idx}`));
+            const visBoxes = activeSS ? (activeSS.data.boxes || []).map((b, bi) => ({ b, bi })).filter(({ bi }) => isItemVisible(activeLayout, blockKey, `box_${bi}`)) : [];
+            const mpCount = profile.mediaPlayers || 0;
+            const assets = Array.isArray(state.media) ? state.media : [];
+            const visMps = Array.from({ length: mpCount }, (_, m) => m).filter(m => isItemVisible(activeLayout, blockKey, `mp_${m}`));
+            const rightHtml = ssList.length > 1 ? `
+                <select data-q-ss-sel="${blockKey}" style="width:auto; padding:2px 6px; font-size:10px;" title="Select SuperSource for Box selectors">
+                    ${ssList.map((ss, idx) => `<option value="${idx}" ${idx === curSSIdx ? "selected" : ""}>${esc(ss.name)}</option>`).join("")}
+                </select>
+            ` : "";
             const body = `
-                <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(175px, 1fr)); gap:8px;">
-                    ${(meWs.data.usk || []).slice(0, maxUsks).map((u, idx) => `
-                        <div class="field" style="padding:7px 9px; border-radius:6px; background:var(--bg-elevated); border:1px solid var(--border);">
-                            <label><span>${esc(meWs.name)} USK ${idx + 1}</span><button class="btn btn-xs ${u.enabled ? "btn-pgm solid" : ""}" data-q-usk-air="${idx}" ${meAttr}>${u.enabled ? "ON AIR" : "Off"}</button></label>
-                            <select data-q-usk-src="${idx}" ${meAttr} style="padding:4px 6px; font-size:11px;">${buildSourceOptionsHtml("usk", u.source || "", meWs)}</select>
-                        </div>
-                    `).join("")}
-                    ${activeSS ? (activeSS.data.boxes || []).map((b, bi) => `
-                        <div class="field" style="padding:7px 9px; border-radius:6px; background:var(--bg-elevated); border:1px solid var(--border);">
-                            <label><span>${esc(activeSS.name)} Box ${bi + 1}</span><button class="btn btn-xs ${b.enabled ? "btn-pvw solid" : ""}" data-q-box-en="${bi}">${b.enabled ? "On" : "Off"}</button></label>
-                            <select data-q-box-src="${bi}" style="padding:4px 6px; font-size:11px;">${buildSourceOptionsHtml("superSourceBox", b.source || "", activeSS)}</select>
-                        </div>
-                    `).join("") : ""}
-                </div>
+                ${filterBarHtml}
+                ${(visUsks.length || visBoxes.length || visMps.length) ? `
+                    <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(175px, 1fr)); gap:8px;">
+                        ${visUsks.map(({ u, idx }) => `
+                            <div class="field" style="padding:7px 9px; border-radius:6px; background:var(--bg-elevated); border:1px solid var(--border);">
+                                <label><span>${esc(meWs.name)} USK ${idx + 1}</span><button class="btn btn-xs ${u.enabled ? "btn-pgm solid" : ""}" data-q-usk-air="${idx}" ${meAttr} title="Toggle USK ${idx + 1} On Air">${u.enabled ? (isSm ? "AIR" : "ON AIR") : (isSm ? "OFF" : "Off")}</button></label>
+                                <select data-q-usk-src="${idx}" ${meAttr} style="padding:4px 6px; font-size:11px;">${buildSourceOptionsHtml("usk", u.source || "", meWs)}</select>
+                            </div>
+                        `).join("")}
+                        ${visBoxes.map(({ b, bi }) => `
+                            <div class="field" style="padding:7px 9px; border-radius:6px; background:var(--bg-elevated); border:1px solid var(--border);">
+                                <label><span>${esc(activeSS.name)} Box ${bi + 1}</span><button class="btn btn-xs ${b.enabled ? "btn-pvw solid" : ""}" data-q-box-en="${bi}" data-ss-id="${activeSS.resourceId}">${b.enabled ? (isSm ? "ON" : "On") : (isSm ? "OFF" : "Off")}</button></label>
+                                <select data-q-box-src="${bi}" data-ss-id="${activeSS.resourceId}" style="padding:4px 6px; font-size:11px;">${buildSourceOptionsHtml("superSourceBox", b.source || "", activeSS)}</select>
+                            </div>
+                        `).join("")}
+                        ${visMps.map(m => {
+                            const mp = state.mediaPlayers?.[m] || { id: m + 1, mediaId: null };
+                            const asset = assets.find(a => a.id === mp.mediaId);
+                            const isVid = asset?.kind === "video";
+                            const isPlaying = isVid && asset.playing === true;
+                            return `
+                                <div class="field" style="padding:7px 9px; border-radius:6px; background:var(--bg-elevated); border:1px solid var(--border);">
+                                    <label>
+                                        <span>MP ${m + 1}</span>
+                                        ${isVid ? `
+                                            <span class="field-row" style="gap:3px;">
+                                                <button type="button" class="btn btn-xs ${isPlaying ? "btn-pvw solid" : ""}" data-sw-mp-play="${asset.id}">${isPlaying ? "⏸" : "▶"}</button>
+                                                <button type="button" class="btn btn-xs btn-pgm" data-sw-mp-stop="${asset.id}">⏹</button>
+                                            </span>
+                                        ` : `<span class="badge ${asset ? "cyan" : ""}" style="font-size:9px;">${asset ? `#${asset.id + 1}` : "Empty"}</span>`}
+                                    </label>
+                                    <select data-sw-mp-sel="${m}" style="padding:4px 6px; font-size:11px;">
+                                        <option value="">Empty</option>
+                                        ${assets.map(a => `<option value="${a.id}" ${mp.mediaId === a.id ? "selected" : ""}>[${a.kind === "video" ? "CLIP" : "STILL"}] #${a.id + 1} — ${esc(a.name)}</option>`).join("")}
+                                    </select>
+                                </div>
+                            `;
+                        }).join("")}
+                    </div>
+                ` : `<div class="muted" style="font-size:11px;">All quick sources hidden — click ⚙ to show items.</div>`}
             `;
-            return blockShell(blockKey, "Quick USK & SuperSource Sources", "", body);
+            return blockShell(blockKey, "Quick USK, SS & Media Sources", rightHtml, body);
+        }
+
+        if (type === "streamRec") {
+            const st = state.streaming || {};
+            const rec = state.recording || {};
+            const stOn = st.status === "streaming" || st.status === "connecting";
+            const recOn = rec.status === "recording";
+            const disks = Array.isArray(rec.disks) ? rec.disks : [];
+            const isVertical = orient === "col";
+            const primary = !parsed.isExtra;
+            const streamSubO = getSubOrientation(activeLayout, blockKey, "stream", "col");
+            const recSubO = getSubOrientation(activeLayout, blockKey, "record", "col");
+            const showStream = isItemVisible(activeLayout, blockKey, "stream");
+            const showRec = isItemVisible(activeLayout, blockKey, "record");
+            const srCount = (showStream ? 1 : 0) + (showRec ? 1 : 0);
+            const rightHtml = `
+                ${disks.length > 1 ? `<button class="btn btn-xs" ${primary ? `id="btnSwSwitchDisk"` : ""} data-sw-switch-disk title="Switch Recording Disk">${isSm ? "⇄" : "⇄ Disk"}</button>` : ""}
+                ${!isLayoutLocked ? `<button class="btn btn-xs" data-sw-open-streamrec title="Configure Platform, Key, Quality & Filename">${isSm ? "⚙" : "⚙ Setup"}</button>` : ""}
+            `;
+            const rem = SwitcherEngine.formatRemainingSeconds(rec.recordingTimeAvailable);
+            const body = `
+                ${filterBarHtml}
+                ${srCount ? `
+                    <div class="streamrec-grid ${isVertical ? "is-vertical" : "is-horizontal"} ${srCount === 1 ? "single-card" : ""}">
+                        ${showStream ? `
+                            <div class="streamrec-card ${stOn ? "on-air" : ""} ${streamSubO === "row" ? "is-row" : "is-col"}">
+                                <div class="field-row" style="justify-content:space-between; gap:4px;">
+                                    <span class="section-label">Stream</span>
+                                    <div class="field-row" style="gap:3px;">
+                                        <span class="mono" ${primary ? `id="swStreamTime"` : ""} data-sw-stream-time style="font-size:${isSm ? "10px" : "11px"}; font-weight:700;">${SwitcherEngine.formatTimecode(st.duration)}</span>
+                                        ${renderSubOrientBtn(blockKey, "stream", streamSubO)}
+                                    </div>
+                                </div>
+                                <div class="streamrec-body">
+                                    <button class="btn btn-sm ${stOn ? "btn-pgm solid" : ""}" ${primary ? `id="btnSwStreamToggle"` : ""} data-sw-stream-toggle style="width:${streamSubO === "row" ? "auto" : "100%"}; font-weight:700;" title="Start / Stop Live Stream">
+                                        ${stOn ? (isSm ? "● AIR" : "ON AIR") : (isSm ? "▶ LIVE" : "▶ STREAM")}
+                                    </button>
+                                    <div class="muted streamrec-meta">
+                                        <span>${esc(st.serviceName || "YouTube")}</span>
+                                        <span>${st.encodingBitrate ? `${(st.encodingBitrate / 1000000).toFixed(1)}M` : esc(st.quality || "High")}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        ` : ""}
+                        ${showRec ? `
+                            <div class="streamrec-card ${recOn ? "on-air" : ""} ${recSubO === "row" ? "is-row" : "is-col"}">
+                                <div class="field-row" style="justify-content:space-between; gap:4px;">
+                                    <span class="section-label">Record</span>
+                                    <div class="field-row" style="gap:3px;">
+                                        <span class="mono" ${primary ? `id="swRecTime"` : ""} data-sw-rec-time style="font-size:${isSm ? "10px" : "11px"}; font-weight:700;">${SwitcherEngine.formatTimecode(rec.duration)}</span>
+                                        ${renderSubOrientBtn(blockKey, "record", recSubO)}
+                                    </div>
+                                </div>
+                                <div class="streamrec-body">
+                                    <button class="btn btn-sm ${recOn ? "btn-pgm solid" : ""}" ${primary ? `id="btnSwRecToggle"` : ""} data-sw-rec-toggle style="width:${recSubO === "row" ? "auto" : "100%"}; font-weight:700;" title="Start / Stop Disk Recording">
+                                        ${recOn ? (isSm ? "■ REC" : "● REC") : (isSm ? "● REC" : "● RECORD")}
+                                    </button>
+                                    <div class="muted streamrec-meta">
+                                        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(rec.filename || "ATEM_Show")}</span>
+                                        ${rec.recordAllInputs ? `<span class="badge amber" style="padding:0 4px;">ISO</span>` : (rem ? `<span>${esc(rem)}</span>` : "")}
+                                    </div>
+                                </div>
+                            </div>
+                        ` : ""}
+                    </div>
+                ` : `<div class="muted" style="font-size:11px;">Both cards hidden — click ⚙ to show Stream or Record.</div>`}
+            `;
+            return blockShell(blockKey, "Stream & Record", rightHtml, body);
         }
 
         return "";
@@ -1511,7 +2263,7 @@ const ViewSwitcher = (() => {
         const padL = parseFloat(cs.paddingLeft) || 16;
         const padR = parseFloat(cs.paddingRight) || 16;
         const innerW = Math.max(360, stRect.width - padL - padR);
-        const colPitch = (innerW + GRID_GAP) / 12;
+        const colPitch = (innerW + GRID_GAP) / GRID_COLS;
         return { stRect, padL, innerW, colPitch, rowPitch: ROW_PITCH };
     }
 
@@ -1527,7 +2279,8 @@ const ViewSwitcher = (() => {
     function wireBlockLayoutInteractions(container) {
         const stack = container.querySelector("#swBlockStack");
         const activeLayout = getActiveLayout();
-        if (!stack || activeLayout.locked) return;
+        const { isGridLocked } = getEffectiveLocks(activeLayout);
+        if (!stack || isGridLocked) return;
 
         // 1. Per-panel Button Size (S / M / L)
         container.querySelectorAll("[data-bscale-blk]").forEach(btn => {
@@ -1544,9 +2297,10 @@ const ViewSwitcher = (() => {
         container.querySelectorAll("[data-span-blk]").forEach(btn => {
             btn.addEventListener("click", () => {
                 const id = btn.dataset.spanBlk;
-                const nextSpan = clampSpan(btn.dataset.spanVal);
-                const cur = clampRect(activeLayout.rects[id], getDefaultRectForKey(id));
-                const nextCol = Math.min(cur.col, 13 - nextSpan);
+                const minSpan = getMinSpanForKey(id);
+                const nextSpan = clampSpan(btn.dataset.spanVal, minSpan);
+                const cur = clampRect(activeLayout.rects[id], getDefaultRectForKey(id), id);
+                const nextCol = Math.min(cur.col, GRID_COLS + 1 - nextSpan);
                 const nextRects = cloneObj(activeLayout.rects);
                 nextRects[id] = { ...cur, col: nextCol, span: nextSpan };
                 activeLayout.rects = resolveGridCollisions(id, nextRects, activeLayout.visible);
@@ -1563,35 +2317,227 @@ const ViewSwitcher = (() => {
                 render(container);
             });
         });
+        container.querySelectorAll("[data-filter-blk]").forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const id = btn.dataset.filterBlk;
+                if (openPanelFilter.has(id)) openPanelFilter.delete(id);
+                else openPanelFilter.add(id);
+                render(container);
+            });
+        });
+        container.querySelectorAll("[data-item-flt-blk]").forEach(chk => {
+            chk.addEventListener("change", () => {
+                togglePanelItem(activeLayout, chk.dataset.itemFltBlk, chk.dataset.itemFltId);
+                saveActiveLayout();
+                render(container);
+            });
+        });
+        container.querySelectorAll("[data-item-flt-reset]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                if (activeLayout.itemFilters) delete activeLayout.itemFilters[btn.dataset.itemFltReset];
+                saveActiveLayout();
+                render(container);
+            });
+        });
+        container.querySelectorAll("[data-dup-blk]").forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                duplicateBlock(btn.dataset.dupBlk);
+                render(container);
+            });
+        });
         container.querySelectorAll("[data-hide-blk]").forEach(btn => {
             btn.addEventListener("click", () => {
                 const id = btn.dataset.hideBlk;
                 const p = parseBlockKey(id);
-                if (p.isExtra && p.type === "destBus") {
+                if (p.isExtra) {
                     activeLayout.extraDestBuses = (activeLayout.extraDestBuses || []).filter(k => k !== id);
+                    activeLayout.extraMultiTrans = (activeLayout.extraMultiTrans || []).filter(k => k !== id);
+                    activeLayout.extraBlocks = (activeLayout.extraBlocks || []).filter(k => k !== id);
                     delete activeLayout.visible[id];
                     delete activeLayout.rects[id];
-                    delete activeLayout.destTargets?.[id];
+                    delete activeLayout.orientations?.[id];
                     delete activeLayout.panelScales?.[id];
+                    delete activeLayout.destTargets?.[id];
+                    delete activeLayout.multiTransTargets?.[id];
                     delete activeLayout.busFilters?.[id];
                     delete activeLayout.busRows?.[id];
-                    activeLayout.pageShortcutTargets = (activeLayout.pageShortcutTargets || []).filter(k => k !== id);
-                } else if (p.isExtra && p.type === "multiTrans") {
-                    activeLayout.extraMultiTrans = (activeLayout.extraMultiTrans || []).filter(k => k !== id);
-                    delete activeLayout.visible[id];
-                    delete activeLayout.rects[id];
-                    delete activeLayout.multiTransTargets?.[id];
-                    delete activeLayout.panelScales?.[id];
                     delete activeLayout.transSections?.[id];
+                    delete activeLayout.itemFilters?.[id];
+                    delete activeLayout.panelState?.[id];
+                    if (activeLayout.subOrientations) {
+                        Object.keys(activeLayout.subOrientations).forEach(sk => {
+                            if (sk.startsWith(`${id}:`)) delete activeLayout.subOrientations[sk];
+                        });
+                    }
+                    activeLayout.pageShortcutTargets = (activeLayout.pageShortcutTargets || []).filter(k => k !== id);
                     if (Array.isArray(activeLayout.shortcutTargets)) {
                         activeLayout.shortcutTargets = activeLayout.shortcutTargets.filter(k => k !== `multi:${id}`);
                     }
+                    openPanelFilter.delete(id);
+                    openMultiTransConfig.delete(id);
                 } else {
                     activeLayout.visible[id] = false;
                 }
                 saveActiveLayout();
                 render(container);
             });
+        });
+
+        // 2b. Colored Region Activation, Dragging, Resizing, Title, Color & Delete (unlocked only)
+        container.querySelectorAll("[data-reg-activate]").forEach(hd => {
+            hd.addEventListener("click", (e) => {
+                e.stopPropagation();
+                activeRegionId = hd.dataset.regActivate;
+                openPanelMenu = null;
+                render(container);
+            });
+        });
+        container.querySelectorAll("[data-reg-done]").forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                activeRegionId = null;
+                render(container);
+            });
+        });
+        container.querySelectorAll("[data-reg-title]").forEach(inp => {
+            inp.addEventListener("input", (e) => {
+                const reg = (activeLayout.regions || []).find(r => r.id === inp.dataset.regTitle);
+                if (reg) {
+                    reg.title = e.target.value;
+                    saveActiveLayout();
+                }
+            });
+            inp.addEventListener("keydown", (e) => {
+                if (e.key === "Enter" || e.key === "Escape") {
+                    e.preventDefault();
+                    activeRegionId = null;
+                    render(container);
+                }
+            });
+        });
+        container.querySelectorAll("[data-reg-color]").forEach(inp => {
+            inp.addEventListener("input", (e) => {
+                const reg = (activeLayout.regions || []).find(r => r.id === inp.dataset.regColor);
+                if (reg) {
+                    reg.color = e.target.value;
+                    const regEl = container.querySelector(`[data-region-id="${reg.id}"]`);
+                    if (regEl) {
+                        const bgEl = regEl.querySelector(".sw-region-bg");
+                        if (bgEl) {
+                            bgEl.style.background = hexToRgba(reg.color, 0.13);
+                            bgEl.style.borderColor = hexToRgba(reg.color, 0.72);
+                        }
+                        const hd = regEl.querySelector(".sw-region-head");
+                        if (hd) hd.style.background = hexToRgba(reg.color, 0.88);
+                    }
+                    saveActiveLayout();
+                }
+            });
+            inp.addEventListener("change", () => render(container));
+        });
+        container.querySelectorAll("[data-reg-swatch]").forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const reg = (activeLayout.regions || []).find(r => r.id === btn.dataset.regId);
+                if (reg) {
+                    reg.color = btn.dataset.regSwatch;
+                    saveActiveLayout();
+                    render(container);
+                }
+            });
+        });
+        container.querySelectorAll("[data-reg-del]").forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const rid = btn.dataset.regDel;
+                activeLayout.regions = (activeLayout.regions || []).filter(r => r.id !== rid);
+                if (activeRegionId === rid) activeRegionId = null;
+                saveActiveLayout();
+                render(container);
+            });
+        });
+        container.querySelectorAll("[data-reg-drag]").forEach(head => {
+            const rid = head.dataset.regDrag;
+            head.addEventListener("pointerdown", (e) => {
+                if (activeLayout.locked || e.button !== 0 || e.target.closest("button, input, label, select")) return;
+                e.preventDefault();
+                const reg = (activeLayout.regions || []).find(r => r.id === rid);
+                const regEl = container.querySelector(`[data-region-id="${rid}"]`);
+                if (!reg || !regEl) return;
+                const startX = e.clientX;
+                const startY = e.clientY;
+                const startScrollTop = stack.scrollTop;
+                const origCol = reg.col;
+                const origRow = reg.row;
+                const { colPitch, rowPitch } = getGridMetrics(stack);
+                let moved = false;
+
+                const onMove = (ev) => {
+                    const dx = ev.clientX - startX;
+                    const dy = (ev.clientY - startY) + (stack.scrollTop - startScrollTop);
+                    if (!moved && Math.hypot(dx, dy) < 4) return;
+                    if (!moved) { moved = true; stack.classList.add("grid-editing"); }
+                    reg.col = Math.max(1, Math.min(GRID_COLS + 1 - reg.span, origCol + Math.round(dx / colPitch)));
+                    reg.row = Math.max(1, Math.min(80, origRow + Math.round(dy / rowPitch)));
+                    applyRectToElement(regEl, reg);
+                };
+                const onUp = () => {
+                    window.removeEventListener("pointermove", onMove);
+                    window.removeEventListener("pointerup", onUp);
+                    stack.classList.remove("grid-editing");
+                    if (moved) { saveActiveLayout(); render(container); }
+                };
+                window.addEventListener("pointermove", onMove);
+                window.addEventListener("pointerup", onUp);
+            });
+        });
+
+        const startRegionResize = (e, rid, mode) => {
+            if (activeLayout.locked) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const reg = (activeLayout.regions || []).find(r => r.id === rid);
+            const regEl = container.querySelector(`[data-region-id="${rid}"]`);
+            if (!reg || !regEl) return;
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const startScrollTop = stack.scrollTop;
+            const origSpan = reg.span;
+            const origRowSpan = reg.rowSpan;
+            const { colPitch, rowPitch } = getGridMetrics(stack);
+            stack.classList.add("grid-editing");
+
+            const onMove = (ev) => {
+                const dx = ev.clientX - startX;
+                const dy = (ev.clientY - startY) + (stack.scrollTop - startScrollTop);
+                if (mode === "w" || mode === "both") {
+                    reg.span = Math.max(2, Math.min(GRID_COLS + 1 - reg.col, origSpan + Math.round(dx / colPitch)));
+                }
+                if (mode === "h" || mode === "both") {
+                    reg.rowSpan = Math.max(1, Math.min(30, origRowSpan + Math.round(dy / rowPitch)));
+                }
+                applyRectToElement(regEl, reg);
+            };
+            const onUp = () => {
+                window.removeEventListener("pointermove", onMove);
+                window.removeEventListener("pointerup", onUp);
+                stack.classList.remove("grid-editing");
+                saveActiveLayout();
+                render(container);
+            };
+            window.addEventListener("pointermove", onMove);
+            window.addEventListener("pointerup", onUp);
+        };
+        container.querySelectorAll("[data-reg-resize-h]").forEach(el => {
+            el.addEventListener("pointerdown", (e) => startRegionResize(e, el.dataset.regResizeH, "h"));
+        });
+        container.querySelectorAll("[data-reg-resize-w]").forEach(el => {
+            el.addEventListener("pointerdown", (e) => startRegionResize(e, el.dataset.regResizeW, "w"));
+        });
+        container.querySelectorAll("[data-reg-resize-both]").forEach(el => {
+            el.addEventListener("pointerdown", (e) => startRegionResize(e, el.dataset.regResizeBoth, "both"));
         });
 
         // 3. Pointer-based True 2D Grid Dragging (only active when unlocked)
@@ -1607,7 +2553,7 @@ const ViewSwitcher = (() => {
                 const startY = e.clientY;
                 const startScrollTop = stack.scrollTop;
                 const baseRects = cloneObj(activeLayout.rects);
-                const orig = clampRect(baseRects[id], getDefaultRectForKey(id));
+                const orig = clampRect(baseRects[id], getDefaultRectForKey(id), id);
                 const { colPitch, rowPitch } = getGridMetrics(stack);
 
                 let moved = false;
@@ -1630,7 +2576,7 @@ const ViewSwitcher = (() => {
 
                     const deltaCols = Math.round(dx / colPitch);
                     const deltaRows = Math.round(dy / rowPitch);
-                    const targetCol = Math.max(1, Math.min(13 - orig.span, orig.col + deltaCols));
+                    const targetCol = Math.max(1, Math.min(GRID_COLS + 1 - orig.span, orig.col + deltaCols));
                     const targetRow = Math.max(1, Math.min(80, orig.row + deltaRows));
 
                     const candidate = cloneObj(baseRects);
@@ -1672,7 +2618,8 @@ const ViewSwitcher = (() => {
             const startY = e.clientY;
             const startScrollTop = stack.scrollTop;
             const baseRects = cloneObj(activeLayout.rects);
-            const orig = clampRect(baseRects[id], getDefaultRectForKey(id));
+            const orig = clampRect(baseRects[id], getDefaultRectForKey(id), id);
+            const minSpan = getMinSpanForKey(id);
             const { colPitch, rowPitch } = getGridMetrics(stack);
             let latestRects = baseRects;
 
@@ -1686,8 +2633,8 @@ const ViewSwitcher = (() => {
                 let nextRowSpan = orig.rowSpan;
 
                 if (mode === "w" || mode === "both") {
-                    const maxSpan = 13 - orig.col;
-                    nextSpan = Math.max(2, Math.min(maxSpan, orig.span + Math.round(dx / colPitch)));
+                    const maxSpan = GRID_COLS + 1 - orig.col;
+                    nextSpan = Math.max(minSpan, Math.min(maxSpan, orig.span + Math.round(dx / colPitch)));
                 }
                 if (mode === "h" || mode === "both") {
                     nextRowSpan = clampRowSpan(orig.rowSpan + Math.round(dy / rowPitch));
@@ -1698,7 +2645,7 @@ const ViewSwitcher = (() => {
                 latestRects = resolveGridCollisions(id, candidate, activeLayout.visible);
 
                 applyRectsToDom(container, latestRects);
-                showResizeHud(blk, `${nextSpan}/12 cols · ${nextRowSpan} rows`);
+                showResizeHud(blk, `${nextSpan}/${GRID_COLS} cols · ${nextRowSpan} rows`);
                 if (parseBlockKey(id).type === "monitors") renderCanvases();
             };
 
@@ -1732,7 +2679,7 @@ const ViewSwitcher = (() => {
             const id = edge.dataset.resizeWBlk;
             edge.addEventListener("dblclick", () => {
                 const nextRects = cloneObj(activeLayout.rects);
-                nextRects[id] = { ...nextRects[id], col: 1, span: 12 };
+                nextRects[id] = { ...nextRects[id], col: 1, span: GRID_COLS };
                 activeLayout.rects = resolveGridCollisions(id, nextRects, activeLayout.visible);
                 saveActiveLayout();
                 render(container);
@@ -1744,7 +2691,7 @@ const ViewSwitcher = (() => {
             const id = corner.dataset.resizeBothBlk;
             corner.addEventListener("dblclick", () => {
                 const nextRects = cloneObj(activeLayout.rects);
-                nextRects[id] = { ...nextRects[id], col: 1, span: 12, rowSpan: getDefaultRectForKey(id).rowSpan };
+                nextRects[id] = { ...nextRects[id], col: 1, span: GRID_COLS, rowSpan: getDefaultRectForKey(id).rowSpan };
                 activeLayout.rects = resolveGridCollisions(id, nextRects, activeLayout.visible);
                 saveActiveLayout();
                 render(container);
@@ -1759,16 +2706,20 @@ const ViewSwitcher = (() => {
         const meList = getAvailableMEWorkspaces();
         const availMeIds = new Set(meList.map(w => w.resourceId));
         const hasSS = (profile.superSource || 0) > 0;
+        const hasSR = hasStreamingRecording(profile);
+        const hasMP = (profile.mediaPlayers || 0) > 0;
 
         const keys = [];
         if (switcherTabMode === "custom") {
             meList.forEach(w => {
-                [`me${w.resourceId}:monitors`, `me${w.resourceId}:bus`, `me${w.resourceId}:trans`].forEach(k => {
+                [`me${w.resourceId}:monitors`, `me${w.resourceId}:bus`, `me${w.resourceId}:trans`, `me${w.resourceId}:usk`].forEach(k => {
                     if (activeLayout.visible[k]) keys.push(k);
                 });
             });
             SHARED_BLOCKS.forEach(k => {
-                if (k === "ssPresets" && !hasSS) return;
+                if ((k === "ssPresets" || k === "ssBoxes") && !hasSS) return;
+                if (k === "mediaPlayers" && !hasMP) return;
+                if (k === "streamRec" && !hasSR) return;
                 if (activeLayout.visible[k]) keys.push(k);
             });
             (activeLayout.extraMultiTrans || []).forEach(k => {
@@ -1776,7 +2727,9 @@ const ViewSwitcher = (() => {
             });
         } else {
             BASE_ME_BLOCKS.forEach(k => {
-                if (k === "ssPresets" && !hasSS) return;
+                if ((k === "ssPresets" || k === "ssBoxes") && !hasSS) return;
+                if (k === "mediaPlayers" && !hasMP) return;
+                if (k === "streamRec" && !hasSR) return;
                 if (activeLayout.visible[k]) keys.push(k);
             });
         }
@@ -1784,11 +2737,111 @@ const ViewSwitcher = (() => {
         (activeLayout.extraDestBuses || []).forEach(k => {
             if (activeLayout.visible[k] !== false) keys.push(k);
         });
+        (activeLayout.extraBlocks || []).forEach(k => {
+            const pType = parseBlockKey(k).type;
+            if ((pType === "ssPresets" || pType === "ssBoxes") && !hasSS) return;
+            if (pType === "mediaPlayers" && !hasMP) return;
+            if (pType === "streamRec" && !hasSR) return;
+            if (activeLayout.visible[k] !== false && !keys.includes(k)) keys.push(k);
+        });
 
         return keys.filter(k => {
             const p = parseBlockKey(k);
             return p.meIndex === null || availMeIds.has(p.meIndex);
         });
+    }
+
+    function duplicateBlock(sourceKey) {
+        const activeLayout = getActiveLayout();
+        const parsed = parseBlockKey(sourceKey);
+        const base = String(sourceKey).replace(/_\d+$/, "");
+        const usedKeys = new Set([
+            ...(activeLayout.extraDestBuses || []),
+            ...(activeLayout.extraMultiTrans || []),
+            ...(activeLayout.extraBlocks || []),
+            ...Object.keys(activeLayout.rects || {})
+        ]);
+        let n = 2;
+        while (usedKeys.has(`${base}_${n}`)) n++;
+        const newKey = `${base}_${n}`;
+
+        if (parsed.type === "destBus") {
+            activeLayout.extraDestBuses ??= [];
+            activeLayout.extraDestBuses.push(newKey);
+        } else if (parsed.type === "multiTrans") {
+            activeLayout.extraMultiTrans ??= [];
+            activeLayout.extraMultiTrans.push(newKey);
+        } else {
+            activeLayout.extraBlocks ??= [];
+            activeLayout.extraBlocks.push(newKey);
+        }
+
+        activeLayout.visible[newKey] = true;
+        const srcRect = clampRect(activeLayout.rects?.[sourceKey], getDefaultRectForKey(sourceKey), sourceKey);
+        activeLayout.rects[newKey] = { col: 1, row: 1, span: srcRect.span, rowSpan: srcRect.rowSpan };
+        activeLayout.rects = placeNewlyVisibleBlock(newKey, activeLayout.rects, activeLayout.visible);
+
+        if (activeLayout.orientations?.[sourceKey]) activeLayout.orientations[newKey] = activeLayout.orientations[sourceKey];
+        if (activeLayout.panelScales?.[sourceKey]) {
+            activeLayout.panelScales ??= {};
+            activeLayout.panelScales[newKey] = activeLayout.panelScales[sourceKey];
+        }
+        if (activeLayout.busFilters?.[sourceKey]) {
+            activeLayout.busFilters ??= {};
+            activeLayout.busFilters[newKey] = activeLayout.busFilters[sourceKey];
+        }
+        if (activeLayout.busRows?.[sourceKey]) {
+            activeLayout.busRows ??= {};
+            activeLayout.busRows[newKey] = cloneObj(activeLayout.busRows[sourceKey]);
+        }
+        if (activeLayout.transSections?.[sourceKey]) {
+            activeLayout.transSections ??= {};
+            activeLayout.transSections[newKey] = cloneObj(activeLayout.transSections[sourceKey]);
+        }
+        if (activeLayout.destTargets?.[sourceKey]) {
+            activeLayout.destTargets ??= {};
+            activeLayout.destTargets[newKey] = activeLayout.destTargets[sourceKey];
+        }
+        if (activeLayout.multiTransTargets?.[sourceKey]) {
+            activeLayout.multiTransTargets ??= {};
+            activeLayout.multiTransTargets[newKey] = cloneObj(activeLayout.multiTransTargets[sourceKey]);
+        }
+        if (Array.isArray(activeLayout.itemFilters?.[sourceKey])) {
+            activeLayout.itemFilters ??= {};
+            activeLayout.itemFilters[newKey] = [...activeLayout.itemFilters[sourceKey]];
+        }
+        if (activeLayout.panelState?.[sourceKey]) {
+            activeLayout.panelState ??= {};
+            activeLayout.panelState[newKey] = cloneObj(activeLayout.panelState[sourceKey]);
+        }
+        if (activeLayout.subOrientations) {
+            Object.entries(activeLayout.subOrientations).forEach(([k, v]) => {
+                if (k.startsWith(`${sourceKey}:`)) {
+                    activeLayout.subOrientations[`${newKey}:${k.slice(sourceKey.length + 1)}`] = v;
+                }
+            });
+        }
+        saveActiveLayout();
+        return newKey;
+    }
+
+    function addRegion() {
+        const activeLayout = getActiveLayout();
+        activeLayout.regions ??= [];
+        const idx = activeLayout.regions.length;
+        const reg = {
+            id: `reg_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+            title: `Region ${idx + 1}`,
+            color: REGION_SWATCHES[idx % REGION_SWATCHES.length],
+            col: 1,
+            row: 1,
+            span: 12,
+            rowSpan: 6
+        };
+        activeLayout.regions.push(reg);
+        activeRegionId = reg.id;
+        saveActiveLayout();
+        return reg;
     }
 
     function addExtraDestBus() {
@@ -1806,7 +2859,7 @@ const ViewSwitcher = (() => {
         activeLayout.destTargets[key] = nextUnused?.id || "aux:1";
         activeLayout.busFilters ??= {};
         activeLayout.busFilters[key] = "all";
-        activeLayout.rects[key] = { col: 1, row: 1, span: 12, rowSpan: 3 };
+        activeLayout.rects[key] = { col: 1, row: 1, span: 24, rowSpan: 3 };
         activeLayout.rects = placeNewlyVisibleBlock(key, activeLayout.rects, activeLayout.visible);
         saveActiveLayout();
     }
@@ -1821,7 +2874,7 @@ const ViewSwitcher = (() => {
         cl.visible[key] = true;
         cl.multiTransTargets ??= {};
         cl.multiTransTargets[key] = ["me:0"];
-        cl.rects[key] = { col: 1, row: 1, span: 8, rowSpan: 3 };
+        cl.rects[key] = { col: 1, row: 1, span: 16, rowSpan: 3 };
         cl.rects = placeNewlyVisibleBlock(key, cl.rects, cl.visible);
         openMultiTransConfig.add(key);
         saveActiveLayout();
@@ -1867,8 +2920,10 @@ const ViewSwitcher = (() => {
         const meList = getAvailableMEWorkspaces();
         const meWs = getActiveMEWorkspace();
         const activeLayout = getActiveLayout();
-        const isLocked = !!activeLayout.locked;
+        const { isShowMode, isGridLocked, isLayoutLocked } = getEffectiveLocks(activeLayout);
         const hasSS = (profile.superSource || 0) > 0;
+        const hasSR = hasStreamingRecording(profile);
+        const hasMP = (profile.mediaPlayers || 0) > 0;
         const armedKeys = getArmedShortcutKeys();
         const modeSavedPresets = savedPresets.filter(p => p.mode === switcherTabMode);
 
@@ -1876,21 +2931,26 @@ const ViewSwitcher = (() => {
             multiTrans: "Multi Transition",
             dsk: "DSKs",
             destBus: "Destination Bus",
-            ...(hasSS ? { ssPresets: "SuperSource Layouts" } : {}),
+            ...(hasMP ? { mediaPlayers: "Media Players" } : {}),
+            ...(hasSS ? { ssPresets: "SuperSource Layouts", ssBoxes: "SuperSource Boxes" } : {}),
             aux: "Aux Outputs",
             macros: "Macro Pads",
-            sources: "Quick Sources"
+            sources: "Quick Sources",
+            ...(hasSR ? { streamRec: "Stream & Record" } : {})
         };
         const meBlockLabels = {
             monitors: "Monitors",
             bus: "Source Bus",
             trans: "Transition",
+            usk: "Upstream Keyers",
             dsk: "DSKs",
             destBus: "Destination Bus",
-            ...(hasSS ? { ssPresets: "SuperSource Layouts" } : {}),
+            ...(hasMP ? { mediaPlayers: "Media Players" } : {}),
+            ...(hasSS ? { ssPresets: "SuperSource Layouts", ssBoxes: "SuperSource Boxes" } : {}),
             aux: "Aux Outputs",
             macros: "Macro Pads",
-            sources: "Quick Sources"
+            sources: "Quick Sources",
+            ...(hasSR ? { streamRec: "Stream & Record" } : {})
         };
 
         const activeClips = typeof CanvasRenderer !== "undefined" && typeof CanvasRenderer.getActiveMediaPlayerClips === "function"
@@ -1900,14 +2960,14 @@ const ViewSwitcher = (() => {
         const visibleMultiKeys = visibleKeys.filter(k => parseBlockKey(k).type === "multiTrans");
 
         container.innerHTML = `
-            <div class="switcher-view">
+            <div class="switcher-view ${isShowMode ? "sw-show-mode" : ""}">
                 <div class="subbar">
                     <div class="field-row" style="gap:8px; flex-wrap:wrap;">
                         <div class="seg">
                             ${meList.map(w => `<button class="seg-item ${switcherTabMode === "me" && w.resourceId === meWs.resourceId ? "active" : ""}" data-me-tab="${w.resourceId}">${esc(w.name)}</button>`).join("")}
                             <button class="seg-item ${switcherTabMode === "custom" ? "active" : ""}" data-sw-custom-tab title="Custom Switcher page — combine multiple M/Es, Multi-Transitions, DSKs & Destination Buses">★ Custom</button>
                         </div>
-                        ${switcherTabMode === "custom" ? `
+                        ${switcherTabMode === "custom" && !isLayoutLocked ? `
                             <div class="field-row" style="gap:4px;" title="Choose 0, 1, or multiple targets that fire on Space (CUT) / Enter (AUTO)">
                                 <span class="muted" style="font-size:11px;">⌨ Cut/Auto:</span>
                                 ${meList.map(w => {
@@ -1931,17 +2991,27 @@ const ViewSwitcher = (() => {
                         `).join("")}
                         ${!activeClips.length && switcherTabMode !== "custom" ? `<span class="muted" style="font-size:11px;">Space=CUT · Enter=AUTO · Shift+1–9=Armed Bus Pages</span>` : ""}
                     </div>
-                    <div class="field-row" style="gap:6px;">
+                    <div class="field-row" style="gap:6px; flex-wrap:wrap;">
+                        ${(!isShowMode && !isGridLocked) ? `<button class="btn btn-sm btn-accent-soft" id="btnSwAddRegion" title="Add a colored background grouping region">+ Region</button>` : ""}
                         <button class="btn btn-sm" id="btnSwSnap">Snapshot</button>
                         <button class="btn btn-sm btn-danger-text" id="btnSwRec">● Record</button>
-                        <button class="btn btn-sm ${isLocked ? "" : "btn-amber"}" id="btnSwLock" title="${isLocked ? "Layout is locked — click to unlock dragging, resizing, and panel header controls" : "Layout is unlocked — click to lock panels in place"}">
-                            ${isLocked ? "🔒 Locked" : "🔓 Unlocked"}
-                        </button>
-                        <button class="btn btn-sm ${showLayoutMenu ? "btn-accent-soft" : ""}" id="btnSwLayout">⊞ Customize Layout</button>
+                        ${!isShowMode ? `
+                            <button class="btn btn-sm ${isGridLocked ? "" : "btn-amber"}" id="btnSwLock" title="${isGridLocked ? "Grid is locked — click to unlock dragging, resizing, duplication, and regions" : "Grid is unlocked — click to lock panel positions & sizes"}">
+                                ${isGridLocked ? "🔒 Grid Locked" : "🔓 Grid Unlocked"}
+                            </button>
+                            <button class="btn btn-sm ${isLayoutLocked ? "btn-pgm" : ""}" id="btnSwLayoutLock" title="${isLayoutLocked ? "Layout options are locked — click to unlock H/V arrangements, button scale & item filters" : "Layout options unlocked — click to lock all internal layout controls"}">
+                                ${isLayoutLocked ? "🔒 Layout Locked" : "🔓 Layout Unlocked"}
+                            </button>
+                            <button class="btn btn-sm ${showLayoutMenu ? "btn-accent-soft" : ""}" id="btnSwLayout">⊞ Customize Layout</button>
+                        ` : ""}
+                        <div class="seg" title="Show Mode locks Grid & Layout and hides all edit controls; Edit Mode allows layout & grid configuration">
+                            <button class="seg-item ${isShowMode ? "active sw-mode-show" : ""}" id="btnSwModeShow" data-sw-mode="show">🎬 Show</button>
+                            <button class="seg-item ${!isShowMode ? "active" : ""}" id="btnSwModeEdit" data-sw-mode="edit">🛠 Edit</button>
+                        </div>
                     </div>
                 </div>
 
-                ${showLayoutMenu ? `
+                ${(showLayoutMenu && !isShowMode) ? `
                     <div style="padding:10px 16px; background:var(--bg-elevated); border-bottom:1px solid var(--border); display:flex; flex-direction:column; gap:10px;">
                         ${switcherTabMode === "custom" ? `
                             <div class="field-row" style="gap:14px; flex-wrap:wrap; align-items:center;">
@@ -1949,7 +3019,7 @@ const ViewSwitcher = (() => {
                                 ${meList.map(w => `
                                     <div class="field-row" style="gap:6px; padding:4px 8px; border-radius:6px; background:var(--bg-surface); border:1px solid var(--border);">
                                         <strong style="font-size:11px;">${esc(w.name)}</strong>
-                                        ${[["monitors","Monitors"],["bus","Bus"],["trans","Trans"]].map(([t, lbl]) => {
+                                        ${[["monitors","Monitors"],["bus","Bus"],["trans","Trans"],["usk","USK"]].map(([t, lbl]) => {
                                             const k = `me${w.resourceId}:${t}`;
                                             return `<label class="check-row" style="font-size:11px;"><input type="checkbox" data-vis-blk="${k}" ${activeLayout.visible[k] ? "checked" : ""}>${lbl}</label>`;
                                         }).join("")}
@@ -1968,6 +3038,7 @@ const ViewSwitcher = (() => {
                                 `).join("")}
                                 <button class="btn btn-xs btn-accent-soft" id="btnSwAddDestBus" title="Add another independent Destination Source Selector Bus panel">+ Dest Bus</button>
                                 ${switcherTabMode === "custom" ? `<button class="btn btn-xs btn-accent-soft" id="btnSwAddMultiTrans" title="Add another Multi-Target Transition panel">+ Multi Trans</button>` : ""}
+                                <button class="btn btn-xs btn-accent-soft" id="btnSwAddRegion" title="Add a colored background grouping region underneath panels">+ Region</button>
                             </div>
                             <div class="field-row" style="gap:8px; flex-wrap:wrap;">
                                 <span class="section-label">All Buttons</span>
@@ -1994,35 +3065,91 @@ const ViewSwitcher = (() => {
                                 <button class="btn btn-xs btn-primary" id="btnSwSavePreset" title="Save current Switcher layout & panel settings to the Preset bar">+ Save Layout</button>
                             </div>
                             <span class="muted" style="font-size:11px;">
-                                ${isLocked ? "🔒 Grid locked — click 🔓 Unlocked to drag, resize, or toggle panel sections." : "🔓 Grid unlocked — drag ⋮⋮, resize edges, or toggle PGM/PVW & Style/Next/Take."}
+                                ${isGridLocked ? "🔒 Grid locked — click 🔓 Grid Unlocked to drag, resize, duplicate, or add regions." : "🔓 Grid unlocked — drag ⋮⋮, resize edges, duplicate ⧉, or filter ⚙."}
                             </span>
                         </div>
                     </div>
                 ` : ""}
 
                 <div class="switcher-main" id="swBlockStack">
+                    ${(activeLayout.regions || []).map(r => renderRegionHtml(r, isGridLocked, activeRegionId === r.id)).join("")}
                     ${visibleKeys.map(k => renderBlockHtml(k, meWs)).join("")}
                 </div>
             </div>
         `;
 
-        // Wire subbar tabs, lock toggle, 0-or-more shortcut target toggles, clip transport & layout customization
+        // Wire subbar tabs, Show/Edit mode, Grid/Layout locks, overflow panel menu & shortcut target toggles
         container.querySelectorAll("[data-me-tab]").forEach(btn => {
             btn.addEventListener("click", () => {
                 switcherTabMode = "me";
                 AppUI.activeME = Number(btn.dataset.meTab);
+                openPanelMenu = null;
+                activeRegionId = null;
                 render(container);
             });
         });
         container.querySelector("[data-sw-custom-tab]")?.addEventListener("click", () => {
             switcherTabMode = "custom";
+            openPanelMenu = null;
+            activeRegionId = null;
             render(container);
+        });
+        container.querySelectorAll("[data-sw-mode]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const mode = btn.dataset.swMode;
+                activeLayout.showMode = mode === "show";
+                if (activeLayout.showMode) {
+                    showLayoutMenu = false;
+                    openPanelFilter.clear();
+                    openMultiTransConfig.clear();
+                    openPanelMenu = null;
+                    activeRegionId = null;
+                    editingPageState = null;
+                }
+                saveActiveLayout();
+                render(container);
+            });
         });
         container.querySelector("#btnSwLock")?.addEventListener("click", () => {
             activeLayout.locked = !activeLayout.locked;
+            openPanelMenu = null;
+            activeRegionId = null;
             saveActiveLayout();
             render(container);
         });
+        container.querySelector("#btnSwLayoutLock")?.addEventListener("click", () => {
+            activeLayout.layoutLocked = !activeLayout.layoutLocked;
+            if (activeLayout.layoutLocked) {
+                openPanelFilter.clear();
+                openMultiTransConfig.clear();
+                openPanelMenu = null;
+                editingPageState = null;
+            }
+            saveActiveLayout();
+            render(container);
+        });
+        container.querySelectorAll("[data-blk-menu]").forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const blk = btn.dataset.blkMenu;
+                openPanelMenu = (openPanelMenu === blk) ? null : blk;
+                render(container);
+            });
+        });
+        if (openPanelMenu || (activeRegionId && !isGridLocked)) {
+            container.querySelector(".switcher-view")?.addEventListener("click", (e) => {
+                let needRender = false;
+                if (openPanelMenu && !e.target.closest(".sw-blk-menu-pop, [data-blk-menu]")) {
+                    openPanelMenu = null;
+                    needRender = true;
+                }
+                if (activeRegionId && !isGridLocked && !e.target.closest(`[data-region-id="${activeRegionId}"], #btnSwAddRegion, [data-reg-activate]`)) {
+                    activeRegionId = null;
+                    needRender = true;
+                }
+                if (needRender) render(container);
+            });
+        }
         container.querySelectorAll("[data-toggle-shortcut-key]").forEach(btn => {
             btn.addEventListener("click", () => {
                 const key = btn.dataset.toggleShortcutKey;
@@ -2053,6 +3180,13 @@ const ViewSwitcher = (() => {
         container.querySelector("#btnSwLayout")?.addEventListener("click", () => { showLayoutMenu = !showLayoutMenu; render(container); });
         container.querySelector("#btnSwAddDestBus")?.addEventListener("click", () => { addExtraDestBus(); render(container); });
         container.querySelector("#btnSwAddMultiTrans")?.addEventListener("click", () => { addExtraMultiTrans(); render(container); });
+        container.querySelectorAll("#btnSwAddRegion").forEach(btn => {
+            btn.addEventListener("click", () => {
+                if (activeLayout.locked) activeLayout.locked = false;
+                addRegion();
+                render(container);
+            });
+        });
 
         container.querySelectorAll("[data-vis-blk]").forEach(chk => {
             chk.addEventListener("change", (e) => {
@@ -2120,6 +3254,21 @@ const ViewSwitcher = (() => {
                 const cur = getTransSectionVisibility(activeLayout, blkKey);
                 activeLayout.transSections ??= {};
                 activeLayout.transSections[blkKey] = { ...cur, [secName]: !cur[secName] };
+                saveActiveLayout();
+                render(container);
+            });
+        });
+
+        // Per-submodule inline H / V arrangement toggles (works even when locked)
+        container.querySelectorAll("[data-sub-orient-blk]").forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const blkKey = btn.dataset.subOrientBlk;
+                const subName = btn.dataset.subOrientName;
+                const fallback = (subName === "stream" || subName === "record") ? "col" : "row";
+                const cur = getSubOrientation(activeLayout, blkKey, subName, fallback);
+                activeLayout.subOrientations ??= {};
+                activeLayout.subOrientations[`${blkKey}:${subName}`] = cur === "col" ? "row" : "col";
                 saveActiveLayout();
                 render(container);
             });
@@ -2349,28 +3498,40 @@ const ViewSwitcher = (() => {
         // SuperSource Layout Presets panel
         container.querySelectorAll("[data-sw-ss-idx]").forEach(btn => {
             btn.addEventListener("click", () => {
-                presetSSIndex = Number(btn.dataset.swSsIdx) || 0;
+                const idx = Number(btn.dataset.swSsIdx) || 0;
+                const blkKey = btn.dataset.swSsBlk;
+                if (blkKey) {
+                    activeLayout.panelState ??= {};
+                    activeLayout.panelState[blkKey] = { ...(activeLayout.panelState[blkKey] || {}), ssIndex: idx };
+                    saveActiveLayout();
+                } else {
+                    presetSSIndex = idx;
+                }
                 render(container);
             });
         });
-        container.querySelector("#btnSwSSAnimToggle")?.addEventListener("click", () => {
-            const cur = SwitcherEngine.getSSAnimSettings?.() || { enabled: false };
-            SwitcherEngine.setSSAnimSettings?.({ enabled: !cur.enabled });
-            render(container);
+        container.querySelectorAll("[data-sw-ss-anim-toggle]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const cur = SwitcherEngine.getSSAnimSettings?.() || { enabled: false };
+                SwitcherEngine.setSSAnimSettings?.({ enabled: !cur.enabled });
+                render(container);
+            });
         });
-        container.querySelector("#selSwSSAnimDur")?.addEventListener("change", (e) => {
-            SwitcherEngine.setSSAnimSettings?.({ durationMs: Number(e.target.value) || 600 });
+        container.querySelectorAll("[data-sw-ss-anim-dur]").forEach(sel => {
+            sel.addEventListener("change", (e) => SwitcherEngine.setSSAnimSettings?.({ durationMs: Number(e.target.value) || 600 }));
         });
-        container.querySelector("#selSwSSAnimEase")?.addEventListener("change", (e) => {
-            SwitcherEngine.setSSAnimSettings?.({ easing: e.target.value });
+        container.querySelectorAll("[data-sw-ss-anim-ease]").forEach(sel => {
+            sel.addEventListener("change", (e) => SwitcherEngine.setSSAnimSettings?.({ easing: e.target.value }));
         });
-        container.querySelector("#selSwSSAnimOff")?.addEventListener("change", (e) => {
-            SwitcherEngine.setSSAnimSettings?.({ offBoxMode: e.target.value });
+        container.querySelectorAll("[data-sw-ss-anim-off]").forEach(sel => {
+            sel.addEventListener("change", (e) => SwitcherEngine.setSSAnimSettings?.({ offBoxMode: e.target.value }));
         });
         container.querySelectorAll("[data-sw-apply-ss]").forEach(card => {
             card.addEventListener("click", () => {
                 const ssList = state.workspaces.filter(w => w.type === "superSource" && isWorkspaceAvailable(w));
-                const activeSS = ssList[presetSSIndex] || ssList[0];
+                const blkKey = card.dataset.swSsBlk;
+                const ssIdx = blkKey ? (activeLayout.panelState?.[blkKey]?.ssIndex ?? presetSSIndex) : presetSSIndex;
+                const activeSS = ssList[ssIdx] || ssList[0];
                 const preset = ShowTemplates.getAllSSPresets().find(p => p.id === card.dataset.swApplySs);
                 if (activeSS && preset) {
                     const animCfg = SwitcherEngine.getSSAnimSettings?.() || { enabled: false };
@@ -2383,7 +3544,9 @@ const ViewSwitcher = (() => {
         container.querySelectorAll("[data-sw-save-ss-preset]").forEach(btn => {
             btn.addEventListener("click", () => {
                 const ssList = state.workspaces.filter(w => w.type === "superSource" && isWorkspaceAvailable(w));
-                const activeSS = ssList[presetSSIndex] || ssList[0];
+                const blkKey = btn.dataset.swSaveSsPreset;
+                const ssIdx = blkKey ? (activeLayout.panelState?.[blkKey]?.ssIndex ?? presetSSIndex) : presetSSIndex;
+                const activeSS = ssList[ssIdx] || ssList[0];
                 if (!activeSS) return;
                 const name = prompt(`Save current ${activeSS.name} layout as:`, `Custom ${(state.customSSPresets?.length || 0) + 1}`);
                 if (!name || !name.trim()) return;
@@ -2397,13 +3560,58 @@ const ViewSwitcher = (() => {
             btn.addEventListener("click", () => AppUI.navigate("compose"));
         });
 
+        // Stream & Record panel (works across all duplicate copies via data attributes)
+        container.querySelectorAll("[data-sw-stream-toggle]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const on = state.streaming?.status === "streaming" || state.streaming?.status === "connecting";
+                if (on) SwitcherEngine.stopStreaming();
+                else SwitcherEngine.startStreaming();
+            });
+        });
+        container.querySelectorAll("[data-sw-rec-toggle]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                if (state.recording?.status === "recording") SwitcherEngine.stopRecording();
+                else SwitcherEngine.startRecording();
+            });
+        });
+        container.querySelectorAll("[data-sw-switch-disk]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                SwitcherEngine.switchRecordingDisk();
+            });
+        });
+        container.querySelectorAll("[data-sw-open-streamrec]").forEach(btn => {
+            btn.addEventListener("click", () => OverlaysUI.openStreamRecDrawer());
+        });
+
         // Aux, Macros & Quick Sources
         container.querySelectorAll("[data-aux-ch]").forEach(sel => sel.addEventListener("change", (e) => SwitcherEngine.setAuxSource(Number(sel.dataset.auxCh), e.target.value)));
-        container.querySelector("#swMacroBank")?.addEventListener("change", (e) => { macroBank = Number(e.target.value) || 0; render(container); });
+        container.querySelectorAll("[data-sw-macro-bank]").forEach(sel => {
+            sel.addEventListener("change", (e) => {
+                const bank = Number(e.target.value) || 0;
+                const blkKey = sel.dataset.swMacroBank;
+                if (blkKey) {
+                    activeLayout.panelState ??= {};
+                    activeLayout.panelState[blkKey] = { ...(activeLayout.panelState[blkKey] || {}), macroBank: bank };
+                    saveActiveLayout();
+                } else {
+                    macroBank = bank;
+                }
+                render(container);
+            });
+        });
         container.querySelectorAll("[data-run-macro]").forEach(btn => btn.addEventListener("click", () => {
             const slot = Number(btn.dataset.runMacro);
             if (state.macros[slot]) { MacroPlayer.playMacro(slot, { mode: "live", speed: 1 }); AppUI.toast(`Ran Macro #${slot + 1}: ${state.macros[slot].name}`, "ok"); }
         }));
+        container.querySelectorAll("[data-q-ss-sel]").forEach(sel => {
+            sel.addEventListener("change", (e) => {
+                const blkKey = sel.dataset.qSsSel;
+                activeLayout.panelState ??= {};
+                activeLayout.panelState[blkKey] = { ...(activeLayout.panelState[blkKey] || {}), ssIndex: Number(e.target.value) || 0 };
+                saveActiveLayout();
+                render(container);
+            });
+        });
         container.querySelectorAll("[data-q-usk-air]").forEach(btn => btn.addEventListener("click", () => {
             const w = resolveMe(btn);
             const idx = Number(btn.dataset.qUskAir);
@@ -2411,13 +3619,67 @@ const ViewSwitcher = (() => {
         }));
         container.querySelectorAll("[data-q-usk-src]").forEach(sel => sel.addEventListener("change", (e) => SwitcherEngine.setLayerSource(resolveMe(sel), Number(sel.dataset.qUskSrc), e.target.value, "usk")));
         const ssList = state.workspaces.filter(w => w.type === "superSource" && isWorkspaceAvailable(w));
-        const activeSS = ssList[quickSSIndex];
-        if (activeSS) {
-            container.querySelectorAll("[data-q-box-en]").forEach(btn => btn.addEventListener("click", () => {
-                const idx = Number(btn.dataset.qBoxEn); SwitcherEngine.setLayerEnabled(activeSS, idx, !activeSS.data.boxes[idx].enabled, "box");
-            }));
-            container.querySelectorAll("[data-q-box-src]").forEach(sel => sel.addEventListener("change", (e) => SwitcherEngine.setLayerSource(activeSS, Number(sel.dataset.qBoxSrc), e.target.value, "box")));
-        }
+        container.querySelectorAll("[data-q-box-en]").forEach(btn => btn.addEventListener("click", () => {
+            const ssId = Number(btn.dataset.ssId);
+            const targetSS = ssList.find(s => s.resourceId === ssId) || ssList[quickSSIndex] || ssList[0];
+            const idx = Number(btn.dataset.qBoxEn);
+            if (targetSS) SwitcherEngine.setLayerEnabled(targetSS, idx, !targetSS.data.boxes[idx].enabled, "box");
+        }));
+        container.querySelectorAll("[data-q-box-src]").forEach(sel => sel.addEventListener("change", (e) => {
+            const ssId = Number(sel.dataset.ssId);
+            const targetSS = ssList.find(s => s.resourceId === ssId) || ssList[quickSSIndex] || ssList[0];
+            const idx = Number(sel.dataset.qBoxSrc);
+            if (targetSS) SwitcherEngine.setLayerSource(targetSS, idx, e.target.value, "box");
+        }));
+        container.querySelectorAll("[data-ss-art-src]").forEach(sel => sel.addEventListener("change", (e) => {
+            const ssId = Number(sel.dataset.ssId);
+            const targetSS = ssList.find(s => s.resourceId === ssId) || ssList[quickSSIndex] || ssList[0];
+            if (targetSS) SwitcherEngine.setSuperSourceArt(targetSS, { artSource: e.target.value });
+        }));
+
+        // Upstream Keyers (USK) panel
+        container.querySelectorAll("[data-usk-air]").forEach(btn => btn.addEventListener("click", () => {
+            const w = resolveMe(btn);
+            const idx = Number(btn.dataset.uskAir);
+            SwitcherEngine.setLayerEnabled(w, idx, !w.data.usk[idx]?.enabled, "usk", true);
+        }));
+        container.querySelectorAll("[data-usk-next]").forEach(btn => btn.addEventListener("click", () => {
+            const w = resolveMe(btn);
+            const idx = Number(btn.dataset.uskNext);
+            SwitcherEngine.toggleNextTransitionKey(w.resourceId, idx);
+        }));
+        container.querySelectorAll("[data-usk-kf]").forEach(btn => btn.addEventListener("click", () => {
+            const w = resolveMe(btn);
+            SwitcherEngine.runUSKKeyframe(w, Number(btn.dataset.uskKf), btn.dataset.uskKfTarget || "A");
+        }));
+        container.querySelectorAll("[data-usk-src]").forEach(sel => sel.addEventListener("change", (e) => {
+            SwitcherEngine.setLayerSource(resolveMe(sel), Number(sel.dataset.uskSrc), e.target.value, "usk");
+        }));
+        container.querySelectorAll("[data-sw-open-compose-usk]").forEach(btn => btn.addEventListener("click", () => AppUI.navigate("compose")));
+
+        // Media Players panel
+        container.querySelectorAll("[data-sw-open-media]").forEach(btn => btn.addEventListener("click", () => AppUI.navigate("media")));
+        container.querySelectorAll("[data-sw-mp-sel]").forEach(sel => sel.addEventListener("change", (e) => {
+            const mpIdx = Number(sel.dataset.swMpSel);
+            const val = e.target.value === "" ? null : Number(e.target.value);
+            SwitcherEngine.setMediaPlayerSlot(mpIdx, val);
+            render(container);
+        }));
+        container.querySelectorAll("[data-sw-mp-play]").forEach(btn => btn.addEventListener("click", () => {
+            CanvasRenderer.controlMediaClip?.(Number(btn.dataset.swMpPlay), "toggle");
+            render(container);
+        }));
+        container.querySelectorAll("[data-sw-mp-stop]").forEach(btn => btn.addEventListener("click", () => {
+            CanvasRenderer.controlMediaClip?.(Number(btn.dataset.swMpStop), "stop");
+            render(container);
+        }));
+        container.querySelectorAll("[data-sw-mp-loop]").forEach(btn => btn.addEventListener("click", () => {
+            const item = (state.media || []).find(m => m.id === Number(btn.dataset.swMpLoop));
+            if (!item) return;
+            item.loop = item.loop === false;
+            if (item._video) item._video.loop = item.loop;
+            render(container);
+        }));
 
         renderCanvases();
         restoreSwitcherScrolls(container, scrollSnap);
@@ -2428,6 +3690,9 @@ const ViewSwitcher = (() => {
         showLayoutMenu = false;
         editingPageState = null;
         openMultiTransConfig = new Set();
+        openPanelFilter = new Set();
+        openPanelMenu = null;
+        activeRegionId = null;
         destPreviewSources = {};
         meLayout = loadSavedLayout(LAYOUT_KEY, DEFAULT_ME_LAYOUT);
         customLayout = loadSavedLayout(CUSTOM_LAYOUT_KEY, buildDefaultCustomLayout());

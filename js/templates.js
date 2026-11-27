@@ -360,6 +360,8 @@ const ShowTemplates = (() => {
         state.dsks = [createDSK(0), createDSK(1), createDSK(2), createDSK(3)];
         state.multiViews = [createMultiViewData(0), createMultiViewData(1), createMultiViewData(2), createMultiViewData(3)];
         state.macros = new Array(100).fill(null);
+        if (typeof createDefaultStreamingState === "function") state.streaming = createDefaultStreamingState();
+        if (typeof createDefaultRecordingState === "function") state.recording = createDefaultRecordingState();
         state.workspaces.forEach(w => {
             if (w.type === "me") w.data = createMEData();
             else if (w.type === "superSource") w.data = createSuperSourceData();
