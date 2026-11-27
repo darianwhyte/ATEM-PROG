@@ -964,3 +964,19 @@ function getOutputData(outputId) {
     return state.outputs[outputId];
 
 }
+
+function isWorkspaceAvailable(ws) {
+    const p = typeof getProfile === "function" ? getProfile() : null;
+    if (!p || !ws) return true;
+    if (ws.type === "me") return ws.resourceId < p.me;
+    if (ws.type === "superSource") return ws.resourceId < p.superSource;
+    return true;
+}
+
+function normalizeLayerTransform(layer) {
+    if (!layer) return;
+    if (layer.keyType === "dve" || layer.flyingKey) return;
+    layer.x = 0;
+    layer.y = 0;
+    layer.size = 1;
+}

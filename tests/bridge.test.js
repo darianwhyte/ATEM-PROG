@@ -6,7 +6,13 @@
 
 const assert = require("assert");
 const path = require("path");
-const { buildCompactHardwareSnapshotFor, executeAtemCommand } = require(path.join(__dirname, "..", "bridge", "server.js"));
+const {
+    buildCompactHardwareSnapshotFor,
+    executeAtemCommand,
+    parseOscPacket,
+    parseOscMessages,
+    handleCompanionApiRequest
+} = require(path.join(__dirname, "..", "bridge", "server.js"));
 const { createBusMappingStore } = require(path.join(__dirname, "..", "bridge", "bus-mapping.js"));
 
 function createMockWs() {
@@ -402,6 +408,128 @@ async function runBridgeTests() {
         await executeAtemCommand(ws, { cmd: "downloadClips" }, ctx);
         assert(ws.msgs.some(m => m.type === "clipPreview" && m.clipIndex === 0 && m.name === "Stinger1"), "downloadClips emitted clipPreview");
         assert(ws.msgs.some(m => m.type === "allClipsComplete" && m.count === 1), "downloadClips emitted allClipsComplete");
+    }
+
+    // 6. OSC Packet Parser & Companion HTTP API (/api/state, /api/osc, /api/action)
+    {
+        const padOscString = (str) => {
+            const raw = Buffer.from(str, "utf8");
+            const paddedLen = (raw.length + 4) & ~3;
+            const out = Buffer.alloc(paddedLen, 0);
+            raw.copy(out, 0);
+            return out;
+        };
+        const buildOscBuf = (address, tags, vals = []) => {
+            const chunks = [padOscString(address), padOscString("," + tags)];
+            let vi = 0;
+            for (const t of tags) {
+                if (t === "i") {
+                    const b = Buffer.alloc(4);
+                    b.writeInt32BE(vals[vi++], 0);
+                    chunks.push(b);
+                } else if (t === "f") {
+                    const b = Buffer.alloc(4);
+                    b.writeFloatBE(vals[vi++], 0);
+                    chunks.push(b);
+                } else if (t === "s") {
+                    chunks.push(padOscString(String(vals[vi++])));
+                }
+            }
+            return Buffer.concat(chunks);
+        };
+
+        const pInt = parseOscPacket(buildOscBuf("/atem/me/1/pgm", "i", [3]));
+        assert.deepStrictEqual(pInt, { address: "/atem/me/1/pgm", typeTags: "i", args: [3] }, "Decoded int32 OSC packet");
+
+        const pFloat = parseOscPacket(buildOscBuf("/atem/ss/1/box/1/pos", "ff", [-8.5, 4.25]));
+        assert(pFloat && pFloat.address === "/atem/ss/1/box/1/pos", "Decoded float32 OSC address");
+        assert(Math.abs(pFloat.args[0] - (-8.5)) < 1e-5 && Math.abs(pFloat.args[1] - 4.25) < 1e-5, "Decoded float32 args accurately");
+
+        const pStr = parseOscPacket(buildOscBuf("/atem/me/1/style", "s", ["Wipe"]));
+        assert.deepStrictEqual(pStr, { address: "/atem/me/1/style", typeTags: "s", args: ["Wipe"] }, "Decoded string OSC packet");
+
+        const pBoolTrue = parseOscPacket(buildOscBuf("/atem/dsk/1/onair", "T"));
+        const pBoolFalse = parseOscPacket(buildOscBuf("/atem/dsk/1/onair", "F"));
+        assert.deepStrictEqual(pBoolTrue.args, [true], "Decoded OSC T true arg");
+        assert.deepStrictEqual(pBoolFalse.args, [false], "Decoded OSC F false arg");
+
+        assert.strictEqual(parseOscPacket(Buffer.alloc(0)), null, "Empty buffer safely returns null");
+        assert.strictEqual(parseOscPacket(Buffer.from("not-osc\0")), null, "Non-slash OSC address safely returns null");
+        assert.strictEqual(parseOscPacket(Buffer.concat([padOscString("/a"), padOscString(",i"), Buffer.from([1, 2])])), null, "Truncated int32 packet safely returns null");
+
+        const elem1 = buildOscBuf("/atem/me/1/cut", "");
+        const len1 = Buffer.alloc(4);
+        len1.writeInt32BE(elem1.length, 0);
+        const bundle = Buffer.concat([Buffer.from("#bundle\0"), Buffer.alloc(8), len1, elem1]);
+        const bundledMsgs = parseOscMessages(bundle);
+        assert.strictEqual(bundledMsgs.length, 1, "Parsed OSC #bundle packet");
+        assert.strictEqual(bundledMsgs[0].address, "/atem/me/1/cut", "Extracted bundled OSC message address");
+
+        const createMockRes = () => {
+            const res = { statusCode: 0, headers: {}, body: "" };
+            res.writeHead = (code, headers = {}) => { res.statusCode = code; res.headers = headers; };
+            res.end = (chunk = "") => { res.body += String(chunk); };
+            return res;
+        };
+        const forwarded = [];
+        const baseCtx = {
+            getStudioState: () => ({ projectName: "Live Show" }),
+            getAtemStatus: () => ({ connected: true, ip: "192.168.1.240", product: "ATEM Mini" }),
+            isLocalOrLanRequest: () => true,
+            forwardToStudioClients: (payload) => { forwarded.push(payload); return 1; }
+        };
+
+        const resState = createMockRes();
+        assert.strictEqual(await handleCompanionApiRequest({ url: "/api/state", method: "GET" }, resState, baseCtx), true);
+        assert.strictEqual(resState.statusCode, 200);
+        const stateJson = JSON.parse(resState.body);
+        assert.strictEqual(stateJson.ok, true);
+        assert.strictEqual(stateJson.studio.projectName, "Live Show");
+        assert.strictEqual(stateJson.atem.connected, true);
+
+        const resOscDoc = createMockRes();
+        assert.strictEqual(await handleCompanionApiRequest({ url: "/api/osc", method: "GET" }, resOscDoc, baseCtx), true);
+        assert.strictEqual(resOscDoc.statusCode, 200);
+        const oscDocJson = JSON.parse(resOscDoc.body);
+        assert(Array.isArray(oscDocJson.oscExamples) && oscDocJson.oscExamples.includes("/atem/me/1/cut"));
+
+        const resAction = createMockRes();
+        await handleCompanionApiRequest(
+            { url: "/api/action", method: "POST" },
+            resAction,
+            { ...baseCtx, readJsonBody: async () => ({ type: "me.cut", me: 0 }) }
+        );
+        assert.strictEqual(resAction.statusCode, 200);
+        assert.deepStrictEqual(JSON.parse(resAction.body), { ok: true, mode: "action", type: "me.cut", forwardedClients: 1 });
+        assert.deepStrictEqual(forwarded[0], { type: "remoteAction", action: { type: "me.cut", me: 0 } });
+
+        const resOscAct = createMockRes();
+        await handleCompanionApiRequest(
+            { url: "/api/action", method: "POST" },
+            resOscAct,
+            { ...baseCtx, readJsonBody: async () => ({ osc: "/atem/me/1/program", args: ["input4"] }) }
+        );
+        assert.strictEqual(resOscAct.statusCode, 200);
+        assert.strictEqual(JSON.parse(resOscAct.body).mode, "osc");
+        assert.deepStrictEqual(forwarded[1], { type: "oscAction", address: "/atem/me/1/program", args: ["input4"] });
+
+        const resForbidden = createMockRes();
+        await handleCompanionApiRequest(
+            { url: "/api/action", method: "POST" },
+            resForbidden,
+            { ...baseCtx, isLocalOrLanRequest: () => false, readJsonBody: async () => ({ type: "me.cut", me: 0 }) }
+        );
+        assert.strictEqual(resForbidden.statusCode, 403, "Rejected non-local/non-LAN caller with 403");
+        assert.strictEqual(forwarded.length, 2, "Forbidden call did not forward to studio clients");
+
+        const resBad = createMockRes();
+        await handleCompanionApiRequest(
+            { url: "/api/action", method: "POST" },
+            resBad,
+            { ...baseCtx, readJsonBody: async () => ({}) }
+        );
+        assert.strictEqual(resBad.statusCode, 400, "Rejected invalid empty action payload with 400");
+        assert.strictEqual(forwarded.length, 2, "Invalid call did not forward to studio clients");
     }
 
     console.log("  [PASS] Bridge server commands, scaling, SS batch coalescing & snapshot verified\n");

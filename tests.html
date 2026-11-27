@@ -105,21 +105,10 @@
 <!-- Lightweight AppUI harness so all production views mount cleanly in test mode -->
 <script>
     const elements = {};
-    function normalizeLayerTransform(layer) {
-        const hasDVE = layer.keyType === "dve" || layer.flyingKey;
-        if (hasDVE) return;
-        layer.x = 0; layer.y = 0; layer.size = 1;
-    }
-    function isWorkspaceAvailable(ws) {
-        const p = getProfile();
-        if (!p) return true;
-        if (ws.type === "me") return ws.resourceId < p.me;
-        if (ws.type === "superSource") return ws.resourceId < p.superSource;
-        return true;
-    }
     const AppUI = {
         activeView: "switcher",
         activeME: 0,
+        _proMode: false,
         esc(val) {
             return String(val ?? "")
                 .replace(/&/g, "&amp;")
@@ -128,6 +117,8 @@
                 .replace(/"/g, "&quot;")
                 .replace(/'/g, "&#39;");
         },
+        isProMode() { return this._proMode; },
+        setProMode(v) { this._proMode = !!v; },
         toast() {},
         refresh() {},
         navigate(v) { this.activeView = v; },
@@ -144,8 +135,6 @@
     function buildUSKs() {}
     function buildSuperSourceLayers() {}
     function validateSelectedLayer() {}
-    function updateUI() {}
-    function refreshProfileUI() { buildSources(); initialiseResources(); }
 </script>
 
 <!-- Production Engine & UI Modules -->
@@ -154,6 +143,8 @@
 <script src="js/sources.js"></script>
 <script src="js/atem-xml.js"></script>
 <script src="js/layout.js"></script>
+<script src="js/engine/ss-animator.js"></script>
+<script src="js/engine/stream-rec.js"></script>
 <script src="js/engine.js"></script>
 <script src="js/history.js"></script>
 <script src="js/storage.js"></script>
@@ -163,12 +154,13 @@
 <script src="js/playback-macro.js"></script>
 <script src="js/canvas-renderer.js"></script>
 <script src="js/popout.js"></script>
-<script src="js/atem-bridge.js"></script>
+<script type="module" src="js/core/actions.js"></script>
+<script type="module" src="js/atem-bridge.js"></script>
 <script src="js/patch-sheet.js"></script>
 <script src="js/import.js"></script>
 <script src="js/export.js"></script>
-<script src="js/ui/overlays.js"></script>
-<script src="js/ui/view-switcher.js"></script>
+<script type="module" src="js/ui/overlays.js"></script>
+<script type="module" src="js/ui/view-switcher.js"></script>
 <script src="js/ui/view-compose.js"></script>
 <script src="js/ui/view-routing.js"></script>
 <script src="js/ui/view-macros.js"></script>
@@ -177,7 +169,7 @@
 <script src="tests/ui.test.js"></script>
 <script src="tests/sync.test.js"></script>
 
-<script>
+<script type="module">
     async function executeTests() {
         // Snapshot ALL atem_prog_* / atemProg_* localStorage keys so running tests never alters user's real show or layouts!
         const backup = new Map();

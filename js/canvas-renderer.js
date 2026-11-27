@@ -331,7 +331,9 @@ const CanvasRenderer = (() => {
 
         const img = media._image;
         if (!img.complete || img.naturalWidth === 0) {
-            img.onload = () => updateUI();
+            img.onload = () => {
+                if (typeof AppUI !== "undefined" && typeof AppUI.refresh === "function") AppUI.refresh("mediaLoad");
+            };
             return null;
         }
         return img;
@@ -610,8 +612,6 @@ const CanvasRenderer = (() => {
                 if (activeView === "switcher" || activeView === "compose" || activeView === "routing" || hasPopouts) {
                     if (typeof AppUI !== "undefined" && typeof AppUI.renderLiveTick === "function") {
                         AppUI.renderLiveTick();
-                    } else if (typeof updateUI === "function") {
-                        updateUI();
                     }
                 }
             }

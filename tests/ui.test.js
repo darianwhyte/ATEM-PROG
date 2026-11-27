@@ -36,6 +36,7 @@ const AtemUiTestSuite = (() => {
         state.media = [];
         state.customBusPages = [];
         AppUI.activeME = 0;
+        if (typeof AppUI !== "undefined" && typeof AppUI.setProMode === "function") AppUI.setProMode(true);
         localStorage.removeItem("atem_prog_switcher_layout_v5");
         localStorage.removeItem("atem_prog_switcher_custom_v4");
         localStorage.removeItem("atem_prog_switcher_saved_presets_v1");
@@ -401,7 +402,7 @@ const AtemUiTestSuite = (() => {
                             rw.__ATEM_REMOTE__.setTab("switch");
                             assert(!!rd.querySelector('[data-tstyle="Wipe"]'), "Switch tab shows transition style buttons");
                             rd.querySelector('[data-tstyle="Wipe"]').click();
-                            assertEqual(emitted[emitted.length - 1]?.type, "setTransitionStyle", "Clicking Wipe emits setTransitionStyle");
+                            assertEqual(emitted[emitted.length - 1]?.type, "me.setTransitionStyle", "Clicking Wipe emits me.setTransitionStyle");
                             const vertBtn = rd.querySelector("#btnVertBus");
                             if (!rd.querySelector(".bus-split")) vertBtn.click();
                             const cols = rd.querySelectorAll(".bus-split .bus-col");
@@ -425,7 +426,7 @@ const AtemUiTestSuite = (() => {
                             pvwBtn.click();
                             rd.querySelector("#btnDestCut").click();
                             const lastDestAction = emitted[emitted.length - 1];
-                            assertEqual(lastDestAction?.type, "setAux", "Dest virtual PVW CUT emits setAux");
+                            assertEqual(lastDestAction?.type, "aux.setSource", "Dest virtual PVW CUT emits aux.setSource");
                             assertEqual(lastDestAction?.source, "input3", "Dest virtual PVW CUT sends staged input3");
 
                             // 4. SuperSource tab: SVG wireframe presets + boxes
@@ -434,7 +435,7 @@ const AtemUiTestSuite = (() => {
                             assert(presetBtns.length >= 4, "SuperSource tab renders visual SVG layout preset buttons");
                             assert(!!presetBtns[0].querySelector("svg"), "SuperSource preset button contains SVG wireframe");
                             presetBtns[0].click();
-                            assertEqual(emitted[emitted.length - 1]?.type, "applySSPreset", "Clicking SS preset emits applySSPreset");
+                            assertEqual(emitted[emitted.length - 1]?.type, "ss.applyPreset", "Clicking SS preset emits ss.applyPreset");
 
                             // 5. DSK, Macros (with LIVE/PVW badges), and Tally tabs
                             rw.__ATEM_REMOTE__.setTab("dsk");
@@ -1154,6 +1155,160 @@ const AtemUiTestSuite = (() => {
                         const prevBox0 = !!ss0.data.boxes[0].enabled;
                         stage.querySelector('[data-block-id="ssBoxes"] [data-q-box-en="0"]').click();
                         assertEqual(!!ss0.data.boxes[0].enabled, !prevBox0, "SuperSource Boxes panel toggles Box 1 enabled state");
+                    }
+                },
+                {
+                    name: "Panel layout options stay visible when Grid Locked + Layout Unlocked; Bus page strip switches to dropdown when narrow or overflowed",
+                    fn() {
+                        resetFreshProfile("ATEM 2 M/E Constellation HD");
+                        const stage = getStage();
+                        ViewSwitcher.render(stage);
+
+                        // 1. Default state is Grid Locked + Layout Unlocked: layout options MUST remain visible on non-compact panels
+                        assertEqual(stage.querySelectorAll("[data-drag-head]").length, 0, "Grid Locked hides drag handles");
+                        assertEqual(stage.querySelectorAll("[data-span-blk]").length, 0, "Grid Locked hides width presets");
+                        assert(!!stage.querySelector('[data-bscale-blk="dsk"]'), "DSK S/M/L layout option stays visible when Grid Locked + Layout Unlocked");
+                        assert(!!stage.querySelector('[data-orient-blk="dsk"]'), "DSK H/V layout option stays visible when Grid Locked + Layout Unlocked");
+                        assert(!!stage.querySelector('[data-filter-blk="dsk"]'), "DSK filter option stays visible when Grid Locked + Layout Unlocked");
+                        assert(!!stage.querySelector('[data-trans-sec-blk="trans"]'), "Transition section toggles stay visible when Grid Locked + Layout Unlocked");
+                        assert(!!stage.querySelector('[data-bus-row-toggle="bus"]'), "Bus PGM/PVW toggles stay visible when Grid Locked + Layout Unlocked");
+
+                        // 2. Layout Lock hides all panel layout options
+                        stage.querySelector("#btnSwLayoutLock").click();
+                        assert(!stage.querySelector('[data-bscale-blk]') && !stage.querySelector('[data-orient-blk]') && !stage.querySelector('[data-filter-blk]'), "Layout Lock hides S/M/L, H/V, and filter controls");
+                        assert(!stage.querySelector('[data-trans-sec-blk]') && !stage.querySelector('[data-bus-row-toggle]'), "Layout Lock hides Transition sections and Bus PGM/PVW toggles");
+                        stage.querySelector("#btnSwLayoutLock").click();
+
+                        // 3. Source Bus page strip adapts to compact dropdown when narrow or inside overflow popover
+                        assert(!!stage.querySelector('[data-block-id="bus"] [data-bfilter="all"]') && !stage.querySelector('[data-bfilter-sel="bus"]'), "Full-width Source Bus renders inline page buttons");
+
+                        stage.querySelector("#btnSwLock").click();
+                        stage.querySelector('[data-span-blk="bus"][data-span-val="8"]').click();
+                        assert(!!stage.querySelector('[data-bfilter-sel="bus"]') && !stage.querySelector('[data-block-id="bus"] [data-bfilter="all"]'), "Narrower 8c Source Bus switches inline page buttons to compact dropdown");
+
+                        stage.querySelector('[data-span-blk="bus"][data-span-val="4"]').click();
+                        const busMenuBtn = stage.querySelector('[data-blk-menu="bus"]');
+                        assert(!!busMenuBtn, "4c Source Bus collapses header options into clickable menu trigger");
+                        busMenuBtn.click();
+                        const pageSel = stage.querySelector('[data-block-id="bus"] .sw-blk-menu-pop [data-bfilter-sel="bus"]');
+                        assert(!!pageSel && !stage.querySelector('[data-block-id="bus"] .sw-blk-menu-pop [data-bfilter]'), "Overflow popover uses compact page dropdown instead of wide button strip");
+
+                        pageSel.value = "external";
+                        pageSel.dispatchEvent(new Event("change"));
+                        assert(!stage.querySelector('[data-block-id="bus"] [data-pgm="color1"]'), "Changing page dropdown in overflow menu filters Source Bus to external inputs");
+                    }
+                },
+                {
+                    name: "Unified AtemActions API validates canonical actions, Touch Remote aliases & OSC paths safely",
+                    fn() {
+                        resetFreshProfile("ATEM 2 M/E Constellation HD");
+                        state.media = [
+                            { id: 0, name: "Stinger", kind: "video", w: 1920, h: 1080, url: "", playing: false, loop: true }
+                        ];
+
+                        // 1. Canonical dispatches across M/E, USK, DSK, Aux, Media Player
+                        assertEqual(AtemActions.dispatch({ type: "me.setProgram", me: 0, source: "input2" }).ok, true, "me.setProgram succeeds");
+                        assertEqual(state.workspaces[0].data.source, "input2", "me.setProgram updated M/E 1 Program");
+                        assertEqual(AtemActions.dispatch({ type: "me.setPreview", me: 0, source: "input4" }).ok, true, "me.setPreview succeeds");
+                        assertEqual(AtemActions.dispatch({ type: "me.cut", me: 0 }).ok, true, "me.cut succeeds");
+                        assertEqual(state.workspaces[0].data.source, "input4", "me.cut swapped Preview to Program");
+
+                        assertEqual(AtemActions.dispatch({ type: "usk.setOnAir", me: 0, usk: 0, enabled: true }).ok, true, "usk.setOnAir succeeds");
+                        assertEqual(state.workspaces[0].data.usk[0].enabled, true, "USK 1 set On Air via AtemActions");
+
+                        assertEqual(AtemActions.dispatch({ type: "dsk.setOnAir", dsk: 0, enabled: true }).ok, true, "dsk.setOnAir succeeds");
+                        assertEqual(getDSK(0).enabled, true, "DSK 1 set On Air via AtemActions");
+
+                        assertEqual(AtemActions.dispatch({ type: "aux.setSource", aux: 1, source: "input3" }).ok, true, "aux.setSource succeeds");
+                        assertEqual(getOutputData(1).source, "input3", "AUX 1 updated via AtemActions");
+
+                        assertEqual(AtemActions.dispatch({ type: "mediaPlayer.setSlot", mp: 0, mediaId: 0 }).ok, true, "mediaPlayer.setSlot succeeds");
+                        assertEqual(state.mediaPlayers[0].mediaId, 0, "MP 1 assigned slot 0");
+                        assertEqual(AtemActions.dispatch({ type: "mediaPlayer.transport", mediaId: 0, action: "toggle" }).ok, true, "mediaPlayer.transport toggle succeeds");
+                        assertEqual(state.media[0].playing, true, "MP clip playback started");
+                        assertEqual(AtemActions.dispatch({ type: "mediaPlayer.transport", mediaId: 0, action: "loop" }).ok, true, "mediaPlayer.transport loop succeeds");
+                        assertEqual(state.media[0].loop, false, "MP clip loop toggled off");
+
+                        // 2. Legacy Touch Remote aliases via AtemActions + AtemBridge.handleIncomingRemoteAction
+                        AtemBridge.handleIncomingRemoteAction({ type: "toggleDSK", dsk: 0 });
+                        assertEqual(getDSK(0).enabled, false, "Legacy toggleDSK alias works via AtemBridge -> AtemActions");
+                        AtemBridge.handleIncomingRemoteAction({ type: "setProgram", me: 0, source: "input1" });
+                        assertEqual(state.workspaces[0].data.source, "input1", "Legacy setProgram alias works via AtemBridge -> AtemActions");
+
+                        // 3. Validation guards reject out-of-range/unknown actions cleanly without corrupting state
+                        assertEqual(AtemActions.dispatch({ type: "unknown.op" }).ok, false, "Unknown action rejected safely");
+                        assertEqual(AtemActions.dispatch({ type: "me.cut", me: 99 }).ok, false, "Out-of-range M/E rejected safely");
+                        assertEqual(AtemActions.dispatch({ type: "dsk.auto", dsk: 99 }).ok, false, "Out-of-range DSK rejected safely");
+                        assertEqual(AtemActions.dispatch({ type: "aux.setSource", aux: 99, source: "input1" }).ok, false, "Out-of-range Aux rejected safely");
+
+                        // 4. OSC Path Parser & Dispatcher
+                        assertEqual(AtemActions.parseOscPath("/atem/me/1/cut")?.type, "me.cut", "Parses 1-based OSC M/E cut path");
+                        assertEqual(AtemActions.parseOscPath("/invalid/foo"), null, "Returns null on unrecognized OSC path");
+                        assertEqual(AtemActions.dispatchOsc("/atem/me/1/preview", ["input5"]).ok, true, "dispatchOsc executes valid OSC preview command");
+                        assertEqual(state.workspaces[0].data.previewSource, "input5", "OSC command updated M/E 1 Preview");
+                        assertEqual(AtemActions.dispatchOsc("/atem/dsk/1/onair", [1]).ok, true, "dispatchOsc executes valid OSC DSK On Air command");
+                        assertEqual(getDSK(0).enabled, true, "OSC command enabled DSK 1");
+                        assert(AtemActions.listActions().includes("me.cut"), "listActions exposes canonical action catalog");
+
+                        // 5. AtemBridge.handleIncomingOscAction round-trip through AtemActions
+                        assertEqual(AtemBridge.handleIncomingOscAction({ address: "/atem/me/1/program", args: ["input5"] }).ok, true, "AtemBridge.handleIncomingOscAction sets ME 1 Program");
+                        assertEqual(state.workspaces[0].data.source, "input5", "AtemBridge OSC updated ME 1 Program to input5");
+                        assertEqual(AtemBridge.handleIncomingOscAction({ address: "/atem/dsk/1/onair", args: [0] }).ok, true, "AtemBridge.handleIncomingOscAction sets DSK 1 Off Air");
+                        assertEqual(getDSK(0).enabled, false, "AtemBridge OSC disabled DSK 1");
+                        assertEqual(AtemBridge.handleIncomingOscAction({ address: "/atem/me/1/program", args: [3] }).ok, true, "OSC numeric shorthand sets ME 1 Program");
+                        assertEqual(state.workspaces[0].data.source, "input3", "OSC numeric 3 resolved to input3");
+                        assertEqual(AtemBridge.handleIncomingOscAction({ address: "/atem/aux/1/source", args: [2001] }).ok, true, "OSC numeric shorthand sets AUX 1");
+                        assertEqual(getOutputData(1).source, "color1", "OSC numeric 2001 resolved to color1");
+                        assertEqual(AtemBridge.handleIncomingOscAction({ address: "/atem/invalid/path" }).ok, false, "AtemBridge.handleIncomingOscAction rejects unknown path cleanly");
+                    }
+                },
+                {
+                    name: "Standard Mode vs Pro Mode cleanly gates Switcher, Routing & Bridge pro chrome",
+                    async fn() {
+                        resetFreshProfile("ATEM 2 M/E Constellation HD");
+                        const stage = getStage();
+
+                        // 1. Standard Mode (Pro Mode OFF)
+                        AppUI.setProMode(false);
+                        ViewSwitcher.render(stage);
+                        assert(!stage.querySelector("[data-sw-custom-tab]"), "Standard Mode hides ★ Custom Switcher tab");
+                        assert(!stage.querySelector("#btnSwLayoutLock"), "Standard Mode hides Layout Lock button");
+                        assert(!stage.querySelector("[data-dup-blk]"), "Standard Mode hides panel duplicate controls");
+                        assert(!stage.querySelector("[data-filter-blk]"), "Standard Mode hides per-panel item filter");
+                        assert(!stage.querySelector("[data-sub-orient-blk]"), "Standard Mode hides submodule H/V toggles");
+
+                        stage.querySelector("#btnSwLock").click();
+                        assert(!stage.querySelector("#btnSwAddRegion"), "Standard Mode hides + Region when grid unlocked");
+                        assert(!stage.querySelector('[data-span-blk][data-span-val="1"]') && !stage.querySelector('[data-span-blk][data-span-val="2"]'), "Standard Mode hides 1c/2c micro width presets");
+
+                        ViewRouting.render(stage);
+                        assert(!stage.querySelector('[data-rtab="busmap"]'), "Standard Mode hides Bus Mapping tab even on Constellation");
+
+                        await OverlaysUI.openConnectionsDrawer("bridge");
+                        assert(!document.querySelector("[data-sync-expand]"), "Standard Mode hides expandable Selective Push/Pull sub-trees");
+                        assert(!document.querySelector(".sw-companion-osc-card"), "Standard Mode hides Companion & OSC API card");
+                        OverlaysUI.close();
+
+                        // 2. Pro Mode (Pro Mode ON)
+                        AppUI.setProMode(true);
+                        ViewSwitcher.render(stage);
+                        assert(!!stage.querySelector("[data-sw-custom-tab]"), "Pro Mode reveals ★ Custom Switcher tab");
+                        assert(!!stage.querySelector("#btnSwLayoutLock"), "Pro Mode reveals Layout Lock button");
+                        assert(!!stage.querySelector("[data-dup-blk]"), "Pro Mode reveals panel duplicate controls");
+                        assert(!!stage.querySelector("[data-filter-blk]"), "Pro Mode reveals per-panel item filter");
+                        assert(!!stage.querySelector("[data-sub-orient-blk]"), "Pro Mode reveals submodule H/V toggles");
+                        stage.querySelector("#btnSwLayout").click();
+                        assertEqual(stage.querySelectorAll("#btnSwAddRegion").length, 1, "Pro Mode renders exactly one #btnSwAddRegion ID even with Customize Layout open");
+                        assert(!!stage.querySelector("[data-sw-add-region]"), "Pro Mode exposes region creation control");
+
+                        ViewRouting.render(stage);
+                        assert(!!stage.querySelector('[data-rtab="busmap"]'), "Pro Mode reveals Bus Mapping tab on Constellation");
+
+                        await OverlaysUI.openConnectionsDrawer("bridge");
+                        assert(!!document.querySelector("[data-sync-expand]"), "Pro Mode reveals expandable Selective Push/Pull sub-trees");
+                        const oscCard = document.querySelector(".sw-companion-osc-card");
+                        assert(!!oscCard && oscCard.textContent.includes("/api/state") && oscCard.textContent.includes("/api/action"), "Pro Mode renders Companion & OSC API reference card");
+                        OverlaysUI.close();
                     }
                 }
             ]

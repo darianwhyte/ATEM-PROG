@@ -877,8 +877,6 @@ async function importXmlProfile(xmlString, options = {
 
         if (typeof AppUI !== "undefined" && typeof AppUI.refresh === "function") {
             AppUI.refresh("xmlImport");
-        } else if (typeof updateUI === "function") {
-            updateUI(true);
         }
         isProgrammaticUiUpdate = false;
         return true;

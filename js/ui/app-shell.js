@@ -4,32 +4,40 @@
 // shortcuts, live canvas ticking, toasts, and unified engine sync.
 // =========================================================================
 
-function isWorkspaceAvailable(ws) {
-    const p = getProfile();
-    if (!p || !ws) return true;
-    if (ws.type === "me") return ws.resourceId < p.me;
-    if (ws.type === "superSource") return ws.resourceId < p.superSource;
-    return true;
-}
-
-function normalizeLayerTransform(layer) {
-    if (!layer) return;
-    const hasDVE = layer.keyType === "dve" || layer.flyingKey;
-    if (hasDVE) return;
-    layer.x = 0;
-    layer.y = 0;
-    layer.size = 1;
-}
-
 const AppUI = (() => {
     const SKIP_START_KEY = "atem_prog_skip_start_v1";
     const THEME_KEY = "atem_prog_theme_v1";
+    const PRO_MODE_KEY = "atem_prog_pro_mode_v1";
     const THEMES = ["dark", "light", "contrast"];
     let activeTheme = "dark";
+    let proMode = false;
+    let toolsMenuOpen = false;
     let activeView = "start"; // "start" | "switcher" | "compose" | "routing" | "macros" | "media"
     let activeME = 0;
     let hasSavedOnBoot = false;
     let _renderQueued = false;
+
+    function loadProMode() {
+        try {
+            proMode = localStorage.getItem(PRO_MODE_KEY) === "1";
+        } catch {
+            proMode = false;
+        }
+    }
+
+    function isProMode() {
+        return !!proMode;
+    }
+
+    function setProMode(val) {
+        const next = !!val;
+        if (proMode === next) return;
+        proMode = next;
+        try { localStorage.setItem(PRO_MODE_KEY, proMode ? "1" : "0"); } catch {}
+        renderHeader();
+        renderActiveView({ preserveScroll: true });
+        if (typeof OverlaysUI !== "undefined" && OverlaysUI.isOpen()) OverlaysUI.syncStatus();
+    }
 
     function loadTheme() {
         try {
@@ -143,9 +151,7 @@ const AppUI = (() => {
         const stTime = typeof SwitcherEngine !== "undefined" && typeof SwitcherEngine.formatTimecode === "function" ? SwitcherEngine.formatTimecode(st.duration) : "00:00:00";
         const recTime = typeof SwitcherEngine !== "undefined" && typeof SwitcherEngine.formatTimecode === "function" ? SwitcherEngine.formatTimecode(rec.duration) : "00:00:00";
         const srText = stOn && recOn ? "AIR + REC" : stOn ? `ON AIR ${stTime}` : recOn ? `REC ${recTime}` : "Stream / Rec";
-        const hasStreamRec = typeof isStreamingRecordingAvailable === "function"
-            ? isStreamingRecordingAvailable()
-            : (typeof supportsStreamingRecording === "function" && supportsStreamingRecording());
+        const hasStreamRec = typeof isStreamingRecordingAvailable === "function" && isStreamingRecordingAvailable();
 
         header.innerHTML = `
             <div class="topbar-left">
@@ -174,38 +180,92 @@ const AppUI = (() => {
                     <span class="status-dot ${ioDotClass}"></span>
                     <span>${esc(ioText)}</span>
                 </button>
-                <button class="pill-btn ${capSt.active ? "active" : ""}" id="btnHdrCapture" title="Capture — USB Live Video, Multi-View Slicer & ATEM Ethernet Stills">
-                    <span class="status-dot ${capSt.active ? "online" : ""}"></span>
-                    <span>${capSt.active ? "Capture Live" : "Capture"}</span>
-                </button>
+                ${capSt.active ? `
+                    <button class="pill-btn active" id="btnHdrCapture" title="Capture Active — Click to configure USB Video or Ethernet Stills">
+                        <span class="status-dot online"></span>
+                        <span>Capture Live</span>
+                    </button>
+                ` : ""}
                 ${hasStreamRec ? `
                     <button class="pill-btn ${(stOn || recOn) ? "active" : ""}" id="btnHdrStreamRec" title="Live Streaming & Disk Recording Control">
                         <span class="status-dot ${(stOn || recOn) ? "rec" : ""}"></span>
                         <span id="hdrStreamRecTxt">${esc(srText)}</span>
                     </button>
                 ` : ""}
-                <button class="btn btn-sm" id="btnHdrTheme" title="Cycle Theme: Dark / Light / High Contrast">
-                    ${activeTheme === "dark" ? "🌙 Dark" : activeTheme === "light" ? "☀ Light" : "◐ Contrast"}
-                </button>
-                <button class="btn btn-sm" id="btnHdrPopoutMV" title="Pop out Interactive Multi-View Window">⧉ MV</button>
                 <div class="field-row" style="gap:3px;">
                     <button class="btn btn-icon btn-sm" id="btnHdrUndo" ${canUndo ? "" : "disabled"} title="Undo (Ctrl+Z)">↶</button>
                     <button class="btn btn-icon btn-sm" id="btnHdrRedo" ${canRedo ? "" : "disabled"} title="Redo (Ctrl+Y)">↷</button>
+                </div>
+                <div class="hdr-tools-wrap">
+                    <button class="btn btn-sm ${toolsMenuOpen ? "btn-accent-soft" : ""}" id="btnHdrTools" title="Tools, Capture, Multi-View, Companion/OSC & Pro Mode">
+                        <span>⚙ Tools</span>${proMode ? `<span class="hdr-pro-badge">PRO</span>` : ""}<span> ▾</span>
+                    </button>
+                    ${toolsMenuOpen ? `
+                        <div class="hdr-tools-pop" id="hdrToolsPop" role="menu">
+                            <label class="hdr-tools-row" title="Show advanced 24-col layout engineering, Regions, Bus Mapping, Companion & OSC">
+                                <span>
+                                    <div style="font-size:12px; font-weight:600;">Pro Mode</div>
+                                    <div class="muted" style="font-size:10px;">Advanced layouts, Bus Map &amp; OSC</div>
+                                </span>
+                                <input type="checkbox" id="chkHdrProMode" ${proMode ? "checked" : ""}>
+                            </label>
+                            <div class="hdr-tools-sep"></div>
+                            <button class="hdr-tools-item" id="btnHdrToolsCapture"><span>📷 Capture (USB &amp; Stills)</span><span class="muted">${capSt.active ? "Live" : ""}</span></button>
+                            <button class="hdr-tools-item" id="btnHdrPopoutMV"><span>⧉ Popout Multi-View</span></button>
+                            <button class="hdr-tools-item" id="btnHdrToolsOsc"><span>🔌 Companion &amp; OSC API</span><span class="muted">PRO</span></button>
+                            <div class="hdr-tools-sep"></div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; padding:2px 4px;">
+                                <span class="muted" style="font-size:11px;">Theme</span>
+                                <div class="seg">
+                                    ${[["dark","Dark"],["light","Light"],["contrast","Hi"]].map(([tv, tl]) => `
+                                        <button type="button" class="seg-item ${activeTheme === tv ? "active" : ""}" data-hdr-theme="${tv}">${tl}</button>
+                                    `).join("")}
+                                </div>
+                            </div>
+                        </div>
+                    ` : ""}
                 </div>
                 <span class="save-dot-label" id="hdrSaveBadge" title="Auto-saved locally">● Saved</span>
             </div>
         `;
 
         header.querySelectorAll("[data-nav]").forEach(btn => {
-            btn.addEventListener("click", () => navigate(btn.dataset.nav));
+            btn.addEventListener("click", () => { toolsMenuOpen = false; navigate(btn.dataset.nav); });
         });
-        header.querySelector("#btnHdrProject")?.addEventListener("click", () => OverlaysUI.openProjectModal());
-        header.querySelector("#btnHdrLiveIO")?.addEventListener("click", () => OverlaysUI.openConnectionsDrawer("bridge"));
-        header.querySelector("#btnHdrCapture")?.addEventListener("click", () => OverlaysUI.openCaptureDrawer());
-        header.querySelector("#btnHdrStreamRec")?.addEventListener("click", () => OverlaysUI.openStreamRecDrawer());
-        header.querySelector("#btnHdrTheme")?.addEventListener("click", cycleTheme);
+        header.querySelector("#btnHdrProject")?.addEventListener("click", () => { toolsMenuOpen = false; OverlaysUI.openProjectModal(); });
+        header.querySelector("#btnHdrLiveIO")?.addEventListener("click", () => { toolsMenuOpen = false; OverlaysUI.openConnectionsDrawer("bridge"); });
+        header.querySelector("#btnHdrCapture")?.addEventListener("click", () => { toolsMenuOpen = false; OverlaysUI.openCaptureDrawer(); });
+        header.querySelector("#btnHdrStreamRec")?.addEventListener("click", () => { toolsMenuOpen = false; OverlaysUI.openStreamRecDrawer(); });
+        header.querySelector("#btnHdrTools")?.addEventListener("click", (e) => {
+            e.stopPropagation();
+            toolsMenuOpen = !toolsMenuOpen;
+            renderHeader();
+        });
+        header.querySelector("#chkHdrProMode")?.addEventListener("change", (e) => {
+            setProMode(e.target.checked);
+            toast(proMode ? "Pro Mode enabled" : "Standard Mode enabled", "ok");
+        });
+        header.querySelector("#btnHdrToolsCapture")?.addEventListener("click", () => {
+            toolsMenuOpen = false;
+            renderHeader();
+            OverlaysUI.openCaptureDrawer();
+        });
         header.querySelector("#btnHdrPopoutMV")?.addEventListener("click", () => {
+            toolsMenuOpen = false;
+            renderHeader();
             if (typeof PopoutManager !== "undefined") PopoutManager.openMultiview(0);
+        });
+        header.querySelector("#btnHdrToolsOsc")?.addEventListener("click", () => {
+            toolsMenuOpen = false;
+            if (!proMode) setProMode(true);
+            else renderHeader();
+            OverlaysUI.openConnectionsDrawer("bridge");
+        });
+        header.querySelectorAll("[data-hdr-theme]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                applyTheme(btn.dataset.hdrTheme);
+                renderHeader();
+            });
         });
         header.querySelector("#btnHdrUndo")?.addEventListener("click", () => HistoryManager.undo());
         header.querySelector("#btnHdrRedo")?.addEventListener("click", () => HistoryManager.redo());
@@ -397,9 +457,15 @@ const AppUI = (() => {
 
             if (typing) return;
 
-            // Escape closes any open modal/drawer
-            if (e.key === "Escape" && typeof OverlaysUI !== "undefined" && OverlaysUI.isOpen()) {
-                OverlaysUI.close();
+            // Escape closes any open modal/drawer or Tools menu
+            if (e.key === "Escape") {
+                if (toolsMenuOpen) {
+                    toolsMenuOpen = false;
+                    renderHeader();
+                }
+                if (typeof OverlaysUI !== "undefined" && OverlaysUI.isOpen()) {
+                    OverlaysUI.close();
+                }
                 return;
             }
 
@@ -498,6 +564,13 @@ const AppUI = (() => {
 
     async function boot() {
         loadTheme();
+        loadProMode();
+        document.addEventListener("click", (e) => {
+            if (toolsMenuOpen && !e.target.closest(".hdr-tools-wrap")) {
+                toolsMenuOpen = false;
+                renderHeader();
+            }
+        });
         buildSources();
         initialiseResources();
 
@@ -582,14 +655,6 @@ const AppUI = (() => {
         }
     }
 
-    // Legacy compatibility shims for any module calling updateUI / refreshProfileUI
-    window.updateUI = () => refresh("legacy");
-    window.refreshProfileUI = () => {
-        buildSources();
-        initialiseResources();
-        refresh("profile");
-    };
-
     const startApp = () => {
         boot().catch(err => {
             console.error("ATEM-PROG boot error:", err);
@@ -619,6 +684,8 @@ const AppUI = (() => {
         updateRecordingPill,
         toast,
         esc,
+        isProMode,
+        setProMode,
         getSkipStart,
         setSkipStart,
         get activeView() { return activeView; },

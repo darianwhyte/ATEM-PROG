@@ -376,13 +376,16 @@ const HistoryManager = (() => {
                 if (elements.chkEditLiveProgram) elements.chkEditLiveProgram.checked = !!state.editLiveProgram;
             }
 
-            if (profileChanged && typeof refreshProfileUI === "function") {
-                refreshProfileUI();
+            if (profileChanged) {
+                if (typeof buildSources === "function") buildSources();
+                if (typeof initialiseResources === "function") initialiseResources();
             } else if (typeof SidebarUI !== "undefined") {
                 SidebarUI.updateDSKUI();
                 SidebarUI.renderMediaPlayersSidebar();
             }
-            if (typeof updateUI === "function") updateUI(true);
+            if (typeof AppUI !== "undefined" && typeof AppUI.refresh === "function") {
+                AppUI.refresh(profileChanged ? "profile" : "history");
+            }
         }
 
         if (typeof StateStorage !== "undefined") {

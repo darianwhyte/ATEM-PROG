@@ -31,21 +31,7 @@ const sandbox = {
     URL: { createObjectURL: () => "blob:mock", revokeObjectURL: () => {} },
     window: { addEventListener: () => {}, removeEventListener: () => {} },
     document: { getElementById: () => null, querySelector: () => null },
-    elements: {},
-    normalizeLayerTransform(layer) {
-        const hasDVE = layer.keyType === "dve" || layer.flyingKey;
-        if (hasDVE) return;
-        layer.x = 0;
-        layer.y = 0;
-        layer.size = 1;
-    },
-    isWorkspaceAvailable(ws) {
-        const p = sandbox.getProfile();
-        if (!p) return true;
-        if (ws.type === "me") return ws.resourceId < p.me;
-        if (ws.type === "superSource") return ws.resourceId < p.superSource;
-        return true;
-    }
+    elements: {}
 };
 sandbox.globalThis = sandbox;
 const ctx = vm.createContext(sandbox);
@@ -63,6 +49,8 @@ const loadScript = (relPath) => {
     "js/sources.js",
     "js/atem-xml.js",
     "js/layout.js",
+    "js/engine/ss-animator.js",
+    "js/engine/stream-rec.js",
     "js/engine.js",
     "js/history.js",
     "js/storage.js",

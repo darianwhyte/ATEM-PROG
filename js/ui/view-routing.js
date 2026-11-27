@@ -688,7 +688,8 @@ const ViewRouting = (() => {
     }
 
     function render(container) {
-        const canBusMap = typeof supportsBusMapping === "function" ? supportsBusMapping() : false;
+        const proMode = typeof AppUI !== "undefined" && typeof AppUI.isProMode === "function" ? AppUI.isProMode() : true;
+        const canBusMap = proMode && (typeof supportsBusMapping === "function" ? supportsBusMapping() : false);
         if (subTab === "busmap" && !canBusMap) subTab = "inputs";
         const ruleCount = canBusMap ? (state.busFollowRules || []).filter(r => r.enabled).length : 0;
         container.innerHTML = `

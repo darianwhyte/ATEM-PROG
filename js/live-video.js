@@ -172,7 +172,6 @@ const LiveVideoManager = (() => {
         img.onload = () => {
             state.inputs[inputCh].thumbnailImage = img;
             if (typeof AppUI !== "undefined" && AppUI.refresh) AppUI.refresh("thumbnail");
-            else if (typeof updateUI === "function") updateUI(true);
         };
         img.src = dataUrl;
 
@@ -201,7 +200,6 @@ const LiveVideoManager = (() => {
         }
         if (captured.size > 0) {
             if (typeof AppUI !== "undefined" && AppUI.refresh) AppUI.refresh("thumbnail");
-            else if (typeof updateUI === "function") updateUI(true);
         }
         return captured.size;
     }
@@ -246,7 +244,6 @@ const LiveVideoManager = (() => {
             }, "image/png");
         }
         if (typeof AppUI !== "undefined" && AppUI.refresh) AppUI.refresh("mediaPool");
-        else if (typeof updateUI === "function") updateUI(true);
 
         return { ok: true, slot: nextSlot, name };
     }
@@ -320,7 +317,7 @@ const LiveVideoManager = (() => {
         }
         if (!silent) {
             emit();
-            if (typeof updateUI === "function") updateUI(true);
+            if (typeof AppUI !== "undefined" && typeof AppUI.refresh === "function") AppUI.refresh("captureStop");
         }
     }
 

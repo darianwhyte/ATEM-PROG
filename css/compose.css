@@ -1,0 +1,274 @@
+/* =========================================================================
+   VIEW 2: COMPOSE (UNIFIED VISUAL CANVAS STUDIO)
+   ========================================================================= */
+.compose-view {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.compose-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+}
+
+.compose-stage-col {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #080a0f;
+}
+
+.compose-canvas-stage {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 14px 18px;
+    overflow: hidden;
+}
+
+.compose-stage-status {
+    width: 100%;
+    max-width: calc((100vh - 250px) * 16 / 9);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 11px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    font-size: 11px;
+    flex-shrink: 0;
+}
+.compose-stage-status.is-preview-override {
+    border-color: var(--amber-border);
+    background: rgba(245, 158, 11, 0.08);
+}
+
+.stage-frame {
+    position: relative;
+    width: 100%;
+    max-width: calc((100vh - 250px) * 16 / 9);
+    aspect-ratio: 16 / 9;
+    background: #000;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+.stage-frame canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.stage-overlay-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+.stage-overlay-layer.interactive { pointer-events: auto; }
+
+.stage-box {
+    position: absolute;
+    border: 1.5px solid rgba(56, 189, 248, 0.7);
+    background: rgba(56, 189, 248, 0.06);
+    cursor: move;
+    user-select: none;
+    transition: border-color 0.1s;
+}
+.stage-box.selected {
+    border: 2px solid var(--accent);
+    background: rgba(56, 189, 248, 0.12);
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.6);
+    z-index: 5;
+}
+.stage-box.off-air-preview {
+    border-style: dashed;
+    border-color: var(--amber);
+    background: rgba(245, 158, 11, 0.07);
+}
+.stage-box.fullscreen-key {
+    background: transparent;
+}
+.stage-mask-guide {
+    position: absolute;
+    border: 1.5px dashed var(--accent);
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.25);
+    pointer-events: none;
+    z-index: 4;
+}
+.stage-box-tag {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(11, 14, 20, 0.85);
+    color: var(--text);
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    pointer-events: none;
+}
+.stage-resize-handle {
+    position: absolute;
+    right: -5px;
+    bottom: -5px;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    background: var(--accent);
+    border: 2px solid #0b0e14;
+    cursor: nwse-resize;
+}
+
+.safe-guides {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+.safe-action {
+    position: absolute;
+    inset: 5%;
+    border: 1px dashed rgba(255, 255, 255, 0.22);
+}
+.safe-title {
+    position: absolute;
+    inset: 10%;
+    border: 1px dashed rgba(56, 189, 248, 0.28);
+}
+
+/* Visual SuperSource Preset Tray */
+.ss-preset-tray {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border);
+    overflow-x: auto;
+}
+
+.ss-preset-card {
+    position: relative;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 7px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: border-color 0.14s, color 0.14s, background 0.14s;
+}
+.ss-preset-card:hover {
+    border-color: var(--accent);
+    color: var(--text);
+    background: var(--bg-hover);
+}
+.ss-preset-svg {
+    width: 64px;
+    height: 36px;
+    display: block;
+}
+.ss-preset-card span {
+    font-size: 10px;
+    font-weight: 600;
+    max-width: 72px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ss-preset-del {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 15px;
+    height: 15px;
+    border-radius: 99px;
+    border: none;
+    background: rgba(15, 23, 42, 0.9);
+    color: #fca5a5;
+    font-size: 10px;
+    line-height: 1;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+.ss-preset-card:hover .ss-preset-del { display: inline-flex; }
+
+.compose-inspector {
+    width: 330px;
+    flex-shrink: 0;
+    background: var(--bg-surface);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.inspector-top {
+    padding: 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.layer-pill-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+.layer-pill {
+    padding: 5px 9px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+.layer-pill:hover { color: var(--text); border-color: var(--border-strong); }
+.layer-pill.active {
+    background: var(--accent-bg);
+    border-color: var(--accent);
+    color: var(--text);
+}
+.layer-pill .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 99px;
+    background: var(--text-dim);
+}
+.layer-pill .dot.on { background: var(--pvw); }
+.layer-pill .dot.air { background: var(--pgm); }
+
+.inspector-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+

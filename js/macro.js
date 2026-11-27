@@ -81,11 +81,11 @@ const MacroEngine = (() => {
                 }
                 break;
             case "TransitionCut":
-                if (meWorkspace && typeof performTransitionCut === "function") {
-                    performTransitionCut(meWorkspace);
+                if (meWorkspace && typeof SwitcherEngine !== "undefined") {
+                    SwitcherEngine.performTransitionCut(meWorkspace);
                 }
                 break;
-                        case "TransitionSelection":
+            case "TransitionSelection":
                 if (meWorkspace && op.selection !== undefined) {
                     const tokens = String(op.selection).split(",").map(s => s.trim());
                     meWorkspace.data.nextTransition = {
@@ -100,8 +100,8 @@ const MacroEngine = (() => {
                 }
                 break;
             case "TransitionAuto":
-                if (meWorkspace && typeof performTransitionCut === "function") {
-                    performTransitionCut(meWorkspace);
+                if (meWorkspace && typeof SwitcherEngine !== "undefined") {
+                    SwitcherEngine.performTransitionCut(meWorkspace);
                 }
                 break;
             case "TransitionDipInput":

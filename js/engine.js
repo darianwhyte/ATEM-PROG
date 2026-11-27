@@ -226,6 +226,8 @@ const SwitcherEngine = (() => {
     // =========================================================================
     function setDeviceProfile(profileName) {
         if (!profiles[profileName]) return false;
+        _ssAnim.cancelAllSuperSourceAnimations();
+        _streamRec.resetTimers();
         state.deviceProfile = profileName;
         if (state.streaming) state.streaming._hardwareSupported = null;
         if (state.recording) state.recording._hardwareSupported = null;
@@ -954,311 +956,13 @@ const SwitcherEngine = (() => {
         return true;
     }
 
-    // =========================================================================
-    // SUPERSOURCE MERGE ANIMATOR (vMix Merge-Style Animated Transitions)
-    // =========================================================================
-    const SS_ANIM_STORAGE_KEY = "atem_prog_ss_anim_v1";
-    const DEFAULT_SS_ANIM = {
-        enabled: true,
-        durationMs: 600,
-        easing: "easeInOut", // "easeInOut" | "easeOut" | "easeIn" | "linear" | "overshoot"
-        offBoxMode: "shrink"  // "cut" | "fade" | "shrink" | "slide" | "crop"
-    };
-    const _activeSSAnimations = new Map(); // ssIdx -> { cancel: fn }
-
-    function getSSAnimSettings() {
-        if (!state.ssAnim || typeof state.ssAnim !== "object") {
-            let saved = null;
-            try {
-                if (typeof localStorage !== "undefined") {
-                    const raw = localStorage.getItem(SS_ANIM_STORAGE_KEY);
-                    if (raw) saved = JSON.parse(raw);
-                }
-            } catch {}
-            state.ssAnim = {
-                ...DEFAULT_SS_ANIM,
-                ...(saved && typeof saved === "object" ? saved : {})
-            };
-        }
-        return {
-            enabled: state.ssAnim.enabled !== false,
-            durationMs: Math.max(0, Math.min(4000, Number(state.ssAnim.durationMs) || 600)),
-            easing: ["easeInOut", "easeOut", "easeIn", "linear", "overshoot"].includes(state.ssAnim.easing) ? state.ssAnim.easing : "easeInOut",
-            offBoxMode: ["cut", "fade", "shrink", "slide", "crop"].includes(state.ssAnim.offBoxMode) ? state.ssAnim.offBoxMode : "shrink"
-        };
-    }
-
-    function setSSAnimSettings(patch = {}) {
-        const cur = getSSAnimSettings();
-        const next = {
-            enabled: patch.enabled !== undefined ? !!patch.enabled : cur.enabled,
-            durationMs: patch.durationMs !== undefined ? Math.max(0, Math.min(4000, Number(patch.durationMs) || 600)) : cur.durationMs,
-            easing: ["easeInOut", "easeOut", "easeIn", "linear", "overshoot"].includes(patch.easing) ? patch.easing : cur.easing,
-            offBoxMode: ["cut", "fade", "shrink", "slide", "crop"].includes(patch.offBoxMode) ? patch.offBoxMode : cur.offBoxMode
-        };
-        state.ssAnim = next;
-        try {
-            if (typeof localStorage !== "undefined") {
-                localStorage.setItem(SS_ANIM_STORAGE_KEY, JSON.stringify(next));
-            }
-        } catch {}
-        return next;
-    }
-
-    function applyEasingCurve(t, easing) {
-        const x = Math.max(0, Math.min(1, t));
-        switch (easing) {
-            case "linear": return x;
-            case "easeIn": return x * x * x;
-            case "easeOut": return 1 - Math.pow(1 - x, 3);
-            case "overshoot": {
-                const c1 = 1.35;
-                const c3 = c1 + 1;
-                return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
-            }
-            case "easeInOut":
-            default:
-                return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
-        }
-    }
-
-    function cancelSuperSourceAnimation(ssIdx) {
-        const active = _activeSSAnimations.get(Number(ssIdx));
-        if (active) {
-            active.cancel();
-            _activeSSAnimations.delete(Number(ssIdx));
-        }
-    }
-
-    function applySSBoxTarget(box, target) {
-        box.enabled = !!target.enabled;
-        if (target.source !== undefined) box.source = target.source;
-        box.x = Number(target.x ?? 0);
-        box.y = Number(target.y ?? 0);
-        box.size = Math.max(0.07, Math.min(1.0, Number(target.size ?? 0.5)));
-        box.cropEnabled = !!target.cropEnabled;
-        box.cropTop = Number(target.cropTop ?? 0);
-        box.cropBottom = Number(target.cropBottom ?? 0);
-        box.cropLeft = Number(target.cropLeft ?? 0);
-        box.cropRight = Number(target.cropRight ?? 0);
-        delete box._animAlpha;
-    }
-
-    function animateSuperSourceTo(ssWorkspaceOrIdx, targetBoxes = [], opts = {}) {
-        const ws = getSSWorkspace(ssWorkspaceOrIdx);
-        if (!ws?.data?.boxes || !Array.isArray(targetBoxes)) return Promise.resolve(false);
-        const ssIdx = ws.resourceId;
-        cancelSuperSourceAnimation(ssIdx);
-
-        const cfg = getSSAnimSettings();
-        const durationMs = opts.instant ? 0 : Math.max(0, Number(opts.durationMs ?? cfg.durationMs) || 0);
-        const easing = opts.easing || cfg.easing || "easeInOut";
-        const offBoxMode = opts.offBoxMode || cfg.offBoxMode || "shrink";
-
-        if (opts.artPatch && typeof opts.artPatch === "object") {
-            Object.assign(ws.data, opts.artPatch);
-        }
-
-        const targets = ws.data.boxes.map((cur, idx) => {
-            const t = targetBoxes[idx] || {};
-            return {
-                enabled: t.enabled !== undefined ? !!t.enabled : !!cur.enabled,
-                source: t.source !== undefined ? t.source : cur.source,
-                x: Number(t.x ?? cur.x ?? 0),
-                y: Number(t.y ?? cur.y ?? 0),
-                size: Math.max(0.07, Math.min(1.0, Number(t.size ?? cur.size ?? 0.5))),
-                cropEnabled: t.cropEnabled !== undefined ? !!t.cropEnabled : !!cur.cropEnabled,
-                cropTop: Number(t.cropTop ?? cur.cropTop ?? 0),
-                cropBottom: Number(t.cropBottom ?? cur.cropBottom ?? 0),
-                cropLeft: Number(t.cropLeft ?? cur.cropLeft ?? 0),
-                cropRight: Number(t.cropRight ?? cur.cropRight ?? 0)
-            };
-        });
-
-        const finishImmediate = () => {
-            ws.data.boxes.forEach((box, idx) => {
-                applySSBoxTarget(box, targets[idx]);
-                const base = { superSourceIndex: String(ssIdx), boxIndex: String(idx) };
-                logMacroAction({ id: "SuperSourceBoxEnabled", ...base, enabled: box.enabled ? "True" : "False" });
-                if (targetBoxes[idx]?.source !== undefined) {
-                    logMacroAction({ id: "SuperSourceBoxSource", ...base, source: mapSource(box.source) });
-                }
-                logMacroAction({ id: "SuperSourceBoxPositionX", ...base, positionX: box.x.toFixed(2) });
-                logMacroAction({ id: "SuperSourceBoxPositionY", ...base, positionY: box.y.toFixed(2) });
-                logMacroAction({ id: "SuperSourceBoxSize", ...base, size: box.size.toFixed(2) });
-            });
-            if (opts.artPatch) {
-                notify("superSourceArt", false, { ss: ssIdx });
-            }
-            notify("superSourcePreset", true, { ss: ssIdx });
-        };
-
-        if (durationMs <= 16) {
-            finishImmediate();
-            return Promise.resolve(true);
-        }
-
-        // Snapshot start frames & determine per-box enter/exit endpoints
-        const specs = ws.data.boxes.map((cur, idx) => {
-            const tgt = targets[idx];
-            const wasOn = !!cur.enabled;
-            const willOn = !!tgt.enabled;
-            const entering = !wasOn && willOn;
-            const exiting = wasOn && !willOn;
-            const stayingOn = wasOn && willOn;
-
-            let start = {
-                x: Number(cur.x ?? 0),
-                y: Number(cur.y ?? 0),
-                size: Math.max(0.07, Math.min(1.0, Number(cur.size ?? 0.5))),
-                cropEnabled: !!cur.cropEnabled,
-                cropTop: Number(cur.cropTop ?? 0),
-                cropBottom: Number(cur.cropBottom ?? 0),
-                cropLeft: Number(cur.cropLeft ?? 0),
-                cropRight: Number(cur.cropRight ?? 0),
-                alpha: wasOn ? 1 : 0
-            };
-            let end = { ...tgt, alpha: willOn ? 1 : 0 };
-
-            if (entering) {
-                if (tgt.source !== undefined) cur.source = tgt.source;
-                if (offBoxMode === "shrink") {
-                    start = { ...end, size: 0.07, alpha: 1 };
-                } else if (offBoxMode === "slide") {
-                    const edgeX = tgt.x < 0 ? -24 : 24;
-                    start = { ...end, x: edgeX, alpha: 1 };
-                } else if (offBoxMode === "crop") {
-                    start = { ...end, cropEnabled: true, cropLeft: 16000, cropRight: 16000, alpha: 1 };
-                } else if (offBoxMode === "fade") {
-                    start = { ...end, alpha: 0 };
-                } else { // "cut"
-                    start = { ...end, alpha: 1 };
-                }
-            } else if (exiting) {
-                if (offBoxMode === "shrink") {
-                    end = { ...start, source: tgt.source, enabled: false, size: 0.07, alpha: 1 };
-                } else if (offBoxMode === "slide") {
-                    const edgeX = start.x < 0 ? -24 : 24;
-                    end = { ...start, source: tgt.source, enabled: false, x: edgeX, alpha: 1 };
-                } else if (offBoxMode === "crop") {
-                    end = { ...start, source: tgt.source, enabled: false, cropEnabled: true, cropLeft: 16000, cropRight: 16000, alpha: 1 };
-                } else if (offBoxMode === "fade") {
-                    end = { ...start, source: tgt.source, enabled: false, alpha: 0 };
-                }
-            }
-
-            return { start, end, tgt, entering, exiting, stayingOn, wasOn, willOn };
-        });
-
-        // Notify art update immediately if staged
-        if (opts.artPatch) {
-            notify("superSourceArt", false, { ss: ssIdx });
-        }
-
-        return new Promise((resolve) => {
-            let cancelled = false;
-            let rafId = null;
-            let ivId = null;
-            const startTime = Date.now();
-
-            const cleanupTimers = () => {
-                if (rafId !== null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(rafId);
-                if (ivId !== null) clearInterval(ivId);
-                rafId = null;
-                ivId = null;
-            };
-
-            _activeSSAnimations.set(ssIdx, {
-                cancel: () => {
-                    cancelled = true;
-                    cleanupTimers();
-                    ws.data.boxes.forEach(b => { if (b) delete b._animAlpha; });
-                    resolve(false);
-                }
-            });
-
-            const stepFrame = () => {
-                if (cancelled) return;
-                const raw = Math.min(1, (Date.now() - startTime) / durationMs);
-                const e = applyEasingCurve(raw, easing);
-
-                specs.forEach((sp, idx) => {
-                    const box = ws.data.boxes[idx];
-                    if (!box) return;
-                    if (!sp.wasOn && !sp.willOn) {
-                        box.enabled = false;
-                        delete box._animAlpha;
-                        return;
-                    }
-                    if (sp.exiting && offBoxMode === "cut") {
-                        box.enabled = false;
-                        delete box._animAlpha;
-                        return;
-                    }
-                    box.enabled = true;
-                    if (sp.stayingOn && sp.tgt.source !== undefined) box.source = sp.tgt.source;
-
-                    const lerp = (a, b) => a + (b - a) * e;
-                    box.x = Number(Math.max(-32, Math.min(32, lerp(sp.start.x, sp.end.x))).toFixed(2));
-                    box.y = Number(Math.max(-18, Math.min(18, lerp(sp.start.y, sp.end.y))).toFixed(2));
-                    box.size = Number(Math.max(0.07, Math.min(1.0, lerp(sp.start.size, sp.end.size))).toFixed(3));
-
-                    if ((sp.entering || sp.exiting) && offBoxMode === "crop") {
-                        box.cropEnabled = true;
-                    } else if (sp.stayingOn) {
-                        box.cropEnabled = !!(sp.start.cropEnabled || sp.tgt.cropEnabled);
-                    }
-                    box.cropTop = Math.max(0, Math.round(lerp(sp.start.cropTop, sp.end.cropTop)));
-                    box.cropBottom = Math.max(0, Math.round(lerp(sp.start.cropBottom, sp.end.cropBottom)));
-                    box.cropLeft = Math.max(0, Math.round(lerp(sp.start.cropLeft, sp.end.cropLeft)));
-                    box.cropRight = Math.max(0, Math.round(lerp(sp.start.cropRight, sp.end.cropRight)));
-
-                    if (offBoxMode === "fade" && (sp.entering || sp.exiting)) {
-                        box._animAlpha = Math.max(0, Math.min(1, sp.start.alpha + (sp.end.alpha - sp.start.alpha) * raw));
-                    } else {
-                        delete box._animAlpha;
-                    }
-                });
-
-                if (raw >= 1) {
-                    cleanupTimers();
-                    _activeSSAnimations.delete(ssIdx);
-                    finishImmediate();
-                    resolve(true);
-                } else {
-                    notify("superSourceAnimFrame", true, { ss: ssIdx });
-                    if (typeof requestAnimationFrame === "function") {
-                        rafId = requestAnimationFrame(stepFrame);
-                    }
-                }
-            };
-
-            if (typeof requestAnimationFrame === "function") {
-                rafId = requestAnimationFrame(stepFrame);
-            } else {
-                ivId = setInterval(stepFrame, 30);
-            }
-        });
-    }
-
-    function commitSuperSourceState(ssWorkspaceOrIdx, draftData, { animate = false, animOpts = {} } = {}) {
-        const ws = getSSWorkspace(ssWorkspaceOrIdx);
-        if (!ws?.data || !draftData) return Promise.resolve(false);
-        const artPatch = {
-            artSource: draftData.artSource || "",
-            artKeySource: draftData.artKeySource || "",
-            artPlace: draftData.artPlace === "Foreground" ? "Foreground" : "Background",
-            artPremultiplied: !!draftData.artPremultiplied,
-            artClip: Number(draftData.artClip ?? 50),
-            artGain: Number(draftData.artGain ?? 50),
-            artInvert: !!draftData.artInvert
-        };
-        return animateSuperSourceTo(ws, draftData.boxes || [], {
-            ...animOpts,
-            instant: !animate,
-            artPatch
-        });
-    }
+    // Delegated SuperSource Merge Animator (js/engine/ss-animator.js)
+    const _ssAnim = createEngineSSAnimator({
+        getSSWorkspace,
+        logMacroAction,
+        mapSource,
+        notify
+    });
 
     // =========================================================================
     // DOWNSTREAM KEYERS (MULTI-DSK 1..4)
@@ -1746,209 +1450,8 @@ const SwitcherEngine = (() => {
         return true;
     }
 
-    // =========================================================================
-    // STREAMING & DISK RECORDING CONTROL
-    // =========================================================================
-    const STREAM_PLATFORM_PRESETS = {
-        YouTube: "rtmp://a.rtmp.youtube.com/live2",
-        Twitch: "rtmp://live.twitch.tv/app",
-        "Facebook Live": "rtmps://live-api-s.facebook.com:443/rtmp/",
-        Vimeo: "rtmps://rtmp-global.cloud.vimeo.com:443/live",
-        Restream: "rtmp://live.restream.io/live",
-        Custom: ""
-    };
-
-    const STREAM_QUALITY_PRESETS = {
-        "HyperDeck High": [45000000, 70000000],
-        "HyperDeck Medium": [25000000, 45000000],
-        "HyperDeck Low": [12000000, 20000000],
-        "Streaming High": [6000000, 9000000],
-        "Streaming Medium": [4500000, 7000000],
-        "Streaming Low": [3000000, 4500000]
-    };
-
-    let _streamStartedAt = 0;
-    let _recordStartedAt = 0;
-    let _streamRecTickTimer = null;
-
-    function ensureStreaming() {
-        if (!state.streaming || typeof state.streaming !== "object") {
-            state.streaming = typeof createDefaultStreamingState === "function"
-                ? createDefaultStreamingState()
-                : { status: "idle", error: "None", serviceName: "YouTube", url: STREAM_PLATFORM_PRESETS.YouTube, key: "", quality: "Streaming High", bitrates: [6000000, 9000000], audioBitrates: { lowBitrate: 128000, highBitrate: 128000 }, encodingBitrate: 0, cacheUsed: 0, duration: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, _hardwareSupported: null };
-        }
-        state.streaming.duration ??= { hours: 0, minutes: 0, seconds: 0, frames: 0 };
-        state.streaming.audioBitrates ??= { lowBitrate: 128000, highBitrate: 128000 };
-        return state.streaming;
-    }
-
-    function ensureRecording() {
-        if (!state.recording || typeof state.recording !== "object") {
-            state.recording = typeof createDefaultRecordingState === "function"
-                ? createDefaultRecordingState()
-                : { status: "idle", error: "None", filename: "ATEM_Show", recordAllInputs: false, recordInAllCameras: false, workingSet1DiskId: 0, workingSet2DiskId: 0, recordingTimeAvailable: 0, duration: { hours: 0, minutes: 0, seconds: 0, frames: 0 }, disks: [], _hardwareSupported: null };
-        }
-        state.recording.duration ??= { hours: 0, minutes: 0, seconds: 0, frames: 0 };
-        state.recording.disks ??= [];
-        return state.recording;
-    }
-
-    function secondsToDurationObj(totalSec) {
-        const s = Math.max(0, Math.floor(Number(totalSec) || 0));
-        return {
-            hours: Math.floor(s / 3600),
-            minutes: Math.floor((s % 3600) / 60),
-            seconds: s % 60,
-            frames: 0
-        };
-    }
-
-    function formatTimecode(tc) {
-        const h = String(Math.max(0, Math.floor(Number(tc?.hours) || 0))).padStart(2, "0");
-        const m = String(Math.max(0, Math.floor(Number(tc?.minutes) || 0))).padStart(2, "0");
-        const s = String(Math.max(0, Math.floor(Number(tc?.seconds) || 0))).padStart(2, "0");
-        return `${h}:${m}:${s}`;
-    }
-
-    function formatRemainingSeconds(sec) {
-        const total = Math.max(0, Math.floor(Number(sec) || 0));
-        if (total <= 0) return "";
-        const hrs = Math.floor(total / 3600);
-        const mins = Math.floor((total % 3600) / 60);
-        return hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m ${total % 60}s`;
-    }
-
-    function syncStreamRecTimer() {
-        const st = ensureStreaming();
-        const rec = ensureRecording();
-        const streamActive = st.status === "streaming" || st.status === "connecting";
-        const recActive = rec.status === "recording";
-
-        if (!streamActive && !recActive) {
-            if (_streamRecTickTimer) {
-                clearInterval(_streamRecTickTimer);
-                _streamRecTickTimer = null;
-            }
-            return;
-        }
-        if (_streamRecTickTimer) return;
-        _streamRecTickTimer = setInterval(() => {
-            const curS = ensureStreaming();
-            const curR = ensureRecording();
-            const sOn = curS.status === "streaming" || curS.status === "connecting";
-            const rOn = curR.status === "recording";
-            if (!sOn && !rOn) {
-                clearInterval(_streamRecTickTimer);
-                _streamRecTickTimer = null;
-                return;
-            }
-            if (sOn && !curS._hardwareDurationSync && _streamStartedAt > 0) {
-                curS.duration = secondsToDurationObj((Date.now() - _streamStartedAt) / 1000);
-                notify("streamTick", true);
-            }
-            if (rOn && !curR._hardwareDurationSync && _recordStartedAt > 0) {
-                curR.duration = secondsToDurationObj((Date.now() - _recordStartedAt) / 1000);
-                notify("recordTick", true);
-            }
-        }, 1000);
-    }
-
-    function setStreamingService(patch = {}) {
-        const st = ensureStreaming();
-        if (typeof patch.serviceName === "string") {
-            st.serviceName = patch.serviceName;
-            if (patch.url === undefined && STREAM_PLATFORM_PRESETS[patch.serviceName]) {
-                st.url = STREAM_PLATFORM_PRESETS[patch.serviceName];
-            }
-        }
-        if (typeof patch.url === "string") st.url = patch.url.slice(0, 512);
-        if (typeof patch.key === "string") st.key = patch.key.slice(0, 512);
-        if (typeof patch.quality === "string" && STREAM_QUALITY_PRESETS[patch.quality]) {
-            st.quality = patch.quality;
-            if (!Array.isArray(patch.bitrates)) {
-                st.bitrates = [...STREAM_QUALITY_PRESETS[patch.quality]];
-            }
-        }
-        if (Array.isArray(patch.bitrates) && patch.bitrates.length >= 2) {
-            st.bitrates = [Math.max(100000, Number(patch.bitrates[0]) || 6000000), Math.max(100000, Number(patch.bitrates[1]) || 9000000)];
-        }
-        if (patch.audioBitrates && typeof patch.audioBitrates === "object") {
-            st.audioBitrates = {
-                lowBitrate: Math.max(32000, Number(patch.audioBitrates.lowBitrate) || 128000),
-                highBitrate: Math.max(32000, Number(patch.audioBitrates.highBitrate) || 128000)
-            };
-        }
-        notify("streamService", false);
-        return true;
-    }
-
-    function startStreaming() {
-        const st = ensureStreaming();
-        st.status = "streaming";
-        st.error = "None";
-        st._hardwareDurationSync = false;
-        st.duration = secondsToDurationObj(0);
-        _streamStartedAt = Date.now();
-        syncStreamRecTimer();
-        notify("streamStart", false);
-        return true;
-    }
-
-    function stopStreaming() {
-        const st = ensureStreaming();
-        st.status = "idle";
-        st._hardwareDurationSync = false;
-        _streamStartedAt = 0;
-        syncStreamRecTimer();
-        notify("streamStop", false);
-        return true;
-    }
-
-    function setRecordingSettings(patch = {}) {
-        const rec = ensureRecording();
-        if (typeof patch.filename === "string") {
-            rec.filename = patch.filename.replace(/[<>:"/\\|?*]+/g, "").slice(0, 128);
-        }
-        if (patch.recordInAllCameras !== undefined) rec.recordInAllCameras = !!patch.recordInAllCameras;
-        if (patch.workingSet1DiskId !== undefined) rec.workingSet1DiskId = Number(patch.workingSet1DiskId) || 0;
-        if (patch.workingSet2DiskId !== undefined) rec.workingSet2DiskId = Number(patch.workingSet2DiskId) || 0;
-        notify("recordSettings", false);
-        return true;
-    }
-
-    function setISORecording(enabled) {
-        const rec = ensureRecording();
-        rec.recordAllInputs = !!enabled;
-        notify("recordISO", false);
-        return true;
-    }
-
-    function startRecording() {
-        const rec = ensureRecording();
-        rec.status = "recording";
-        rec.error = "None";
-        rec._hardwareDurationSync = false;
-        rec.duration = secondsToDurationObj(0);
-        _recordStartedAt = Date.now();
-        syncStreamRecTimer();
-        notify("recordStart", false);
-        return true;
-    }
-
-    function stopRecording() {
-        const rec = ensureRecording();
-        rec.status = "idle";
-        rec._hardwareDurationSync = false;
-        _recordStartedAt = 0;
-        syncStreamRecTimer();
-        notify("recordStop", false);
-        return true;
-    }
-
-    function switchRecordingDisk() {
-        notify("recordSwitchDisk", false);
-        return true;
-    }
+    // Delegated Streaming & Disk Recording subsystem (js/engine/stream-rec.js)
+    const _streamRec = createEngineStreamRec({ notify });
 
     return {
         subscribe,
@@ -2004,11 +1507,11 @@ const SwitcherEngine = (() => {
         setSuperSourceArt,
         applySuperSourcePreset,
         SUPERSOURCE_PRESETS,
-        getSSAnimSettings,
-        setSSAnimSettings,
-        animateSuperSourceTo,
-        commitSuperSourceState,
-        cancelSuperSourceAnimation,
+        getSSAnimSettings: _ssAnim.getSSAnimSettings,
+        setSSAnimSettings: _ssAnim.setSSAnimSettings,
+        animateSuperSourceTo: _ssAnim.animateSuperSourceTo,
+        commitSuperSourceState: _ssAnim.commitSuperSourceState,
+        cancelSuperSourceAnimation: _ssAnim.cancelSuperSourceAnimation,
         selectDSK,
         setDSKFill,
         setDSKKey,
@@ -2037,29 +1540,18 @@ const SwitcherEngine = (() => {
         setMultiViewOption,
         setMultiViewWindow,
         resetMultiView,
-        STREAM_PLATFORM_PRESETS,
-        STREAM_QUALITY_PRESETS,
-        formatTimecode,
-        formatRemainingSeconds,
-        setStreamingService,
-        startStreaming,
-        stopStreaming,
-        setRecordingSettings,
-        setISORecording,
-        startRecording,
-        stopRecording,
-        switchRecordingDisk,
+        STREAM_PLATFORM_PRESETS: _streamRec.STREAM_PLATFORM_PRESETS,
+        STREAM_QUALITY_PRESETS: _streamRec.STREAM_QUALITY_PRESETS,
+        formatTimecode: _streamRec.formatTimecode,
+        formatRemainingSeconds: _streamRec.formatRemainingSeconds,
+        setStreamingService: _streamRec.setStreamingService,
+        startStreaming: _streamRec.startStreaming,
+        stopStreaming: _streamRec.stopStreaming,
+        setRecordingSettings: _streamRec.setRecordingSettings,
+        setISORecording: _streamRec.setISORecording,
+        startRecording: _streamRec.startRecording,
+        stopRecording: _streamRec.stopRecording,
+        switchRecordingDisk: _streamRec.switchRecordingDisk,
         get isAutoTransitioning() { return _isAutoTransitioning; }
     };
 })();
-
-// Backwards-compatible global delegates for existing UI/macro modules
-function logMacroAction(op) { SwitcherEngine.logMacroAction(op); }
-function logNextTransition(ws) { SwitcherEngine.logNextTransition(ws); }
-function recordActiveLayerParams() { SwitcherEngine.recordLayerParams(); }
-function recordActiveLayerMotion() { SwitcherEngine.recordLayerMotion(); }
-function recordActiveLayerSingleParam(opId, attrs) { SwitcherEngine.recordLayerSingleParam(opId, attrs); }
-function recordDSKParams(dsk) { SwitcherEngine.recordDSKParams(dsk); }
-function performTransitionCut(meWorkspace) { return SwitcherEngine.performTransitionCut(meWorkspace); }
-function setDSKTie(dskIndex, tied) { return SwitcherEngine.setDSKTie(dskIndex, tied); }
-function performDSKAuto(dskIndex) { return SwitcherEngine.performDSKAuto(dskIndex); }

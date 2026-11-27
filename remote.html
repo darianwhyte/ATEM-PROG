@@ -394,7 +394,7 @@
                 currentSource: a.source || "",
                 currentShort: a.shortName || a.sourceName || "—",
                 sources: studio.outputSources || [],
-                apply: (srcId) => sendAction({ type: "setAux", aux: a.id, source: srcId })
+                apply: (srcId) => sendAction({ type: "aux.setSource", aux: a.id, source: srcId })
             });
         });
         (studio?.mixEffects || []).forEach(me => {
@@ -406,7 +406,7 @@
                     currentSource: u.source || "",
                     currentShort: u.shortName || "—",
                     sources: me.uskSources || me.sources || [],
-                    apply: (srcId) => sendAction({ type: "setUSKSource", me: me.index, usk: u.index, source: srcId })
+                    apply: (srcId) => sendAction({ type: "usk.setSource", me: me.index, usk: u.index, source: srcId })
                 });
             });
         });
@@ -418,7 +418,7 @@
                 currentSource: d.source || "",
                 currentShort: d.fillShort || "—",
                 sources: studio.dskSources || studio.outputSources || [],
-                apply: (srcId) => sendAction({ type: "setDSKSource", dsk: d.id, source: srcId })
+                apply: (srcId) => sendAction({ type: "dsk.setSource", dsk: d.id, source: srcId })
             });
         });
         (studio?.superSources || []).forEach(ss => {
@@ -430,7 +430,7 @@
                     currentSource: b.source || "",
                     currentShort: b.shortName || "—",
                     sources: ss.boxSources || [],
-                    apply: (srcId) => sendAction({ type: "setSSBoxSource", ss: ss.index, box: b.index, source: srcId })
+                    apply: (srcId) => sendAction({ type: "ss.setBoxSource", ss: ss.index, box: b.index, source: srcId })
                 });
             });
             dests.push({
@@ -440,7 +440,7 @@
                 currentSource: ss.artSource || "",
                 currentShort: ss.artShort || "—",
                 sources: ss.artSources || [],
-                apply: (srcId) => sendAction({ type: "setSSArtSource", ss: ss.index, source: srcId })
+                apply: (srcId) => sendAction({ type: "ss.setArtSource", ss: ss.index, source: srcId })
             });
         });
         return dests;
@@ -464,10 +464,10 @@
             </div>
         `).join("");
         strip.querySelectorAll("[data-clip-toggle]").forEach(btn => {
-            btn.addEventListener("click", () => sendAction({ type: "controlMediaClip", mediaId: Number(btn.dataset.clipToggle), action: "toggle" }));
+            btn.addEventListener("click", () => sendAction({ type: "mediaPlayer.transport", mediaId: Number(btn.dataset.clipToggle), action: "toggle" }));
         });
         strip.querySelectorAll("[data-clip-stop]").forEach(btn => {
-            btn.addEventListener("click", () => sendAction({ type: "controlMediaClip", mediaId: Number(btn.dataset.clipStop), action: "stop" }));
+            btn.addEventListener("click", () => sendAction({ type: "mediaPlayer.transport", mediaId: Number(btn.dataset.clipStop), action: "stop" }));
         });
     }
 
@@ -587,17 +587,17 @@
             persistPrefs();
             render();
         }));
-        body.querySelectorAll("[data-tstyle]").forEach(b => b.addEventListener("click", () => sendAction({ type: "setTransitionStyle", me: activeME, style: b.dataset.tstyle })));
-        body.querySelector("#btnRateDec")?.addEventListener("click", () => sendAction({ type: "setTransitionRate", me: activeME, rate: Math.max(1, (Number(me.transitionRate) || 25) - 5) }));
-        body.querySelector("#btnRateInc")?.addEventListener("click", () => sendAction({ type: "setTransitionRate", me: activeME, rate: Math.min(250, (Number(me.transitionRate) || 25) + 5) }));
-        body.querySelector("#btnPrevTrans")?.addEventListener("click", () => sendAction({ type: "togglePrevTrans", me: activeME }));
-        body.querySelectorAll("[data-nt]").forEach(b => b.addEventListener("click", () => sendAction({ type: "toggleNextTrans", me: activeME, target: b.dataset.nt === "bkgd" ? "bkgd" : Number(b.dataset.nt) })));
-        body.querySelectorAll("[data-usk-air]").forEach(b => b.addEventListener("click", () => sendAction({ type: "toggleUSK", me: activeME, usk: Number(b.dataset.uskAir) })));
-        body.querySelector("#remCut")?.addEventListener("click", () => sendAction({ type: "cut", me: activeME }));
-        body.querySelector("#remAuto")?.addEventListener("click", () => sendAction({ type: "auto", me: activeME }));
-        body.querySelector("#remFtb")?.addEventListener("click", () => sendAction({ type: "ftb", me: activeME }));
-        body.querySelectorAll("[data-pgm]").forEach(b => b.addEventListener("click", () => sendAction({ type: "setProgram", me: activeME, source: b.dataset.pgm })));
-        body.querySelectorAll("[data-pvw]").forEach(b => b.addEventListener("click", () => sendAction({ type: "setPreview", me: activeME, source: b.dataset.pvw })));
+        body.querySelectorAll("[data-tstyle]").forEach(b => b.addEventListener("click", () => sendAction({ type: "me.setTransitionStyle", me: activeME, style: b.dataset.tstyle })));
+        body.querySelector("#btnRateDec")?.addEventListener("click", () => sendAction({ type: "me.setTransitionRate", me: activeME, rate: Math.max(1, (Number(me.transitionRate) || 25) - 5) }));
+        body.querySelector("#btnRateInc")?.addEventListener("click", () => sendAction({ type: "me.setTransitionRate", me: activeME, rate: Math.min(250, (Number(me.transitionRate) || 25) + 5) }));
+        body.querySelector("#btnPrevTrans")?.addEventListener("click", () => sendAction({ type: "me.togglePreviewTransition", me: activeME }));
+        body.querySelectorAll("[data-nt]").forEach(b => b.addEventListener("click", () => sendAction({ type: "me.toggleNextTransition", me: activeME, target: b.dataset.nt === "bkgd" ? "bkgd" : Number(b.dataset.nt) })));
+        body.querySelectorAll("[data-usk-air]").forEach(b => b.addEventListener("click", () => sendAction({ type: "usk.setOnAir", me: activeME, usk: Number(b.dataset.uskAir) })));
+        body.querySelector("#remCut")?.addEventListener("click", () => sendAction({ type: "me.cut", me: activeME }));
+        body.querySelector("#remAuto")?.addEventListener("click", () => sendAction({ type: "me.auto", me: activeME }));
+        body.querySelector("#remFtb")?.addEventListener("click", () => sendAction({ type: "me.ftb", me: activeME }));
+        body.querySelectorAll("[data-pgm]").forEach(b => b.addEventListener("click", () => sendAction({ type: "me.setProgram", me: activeME, source: b.dataset.pgm })));
+        body.querySelectorAll("[data-pvw]").forEach(b => b.addEventListener("click", () => sendAction({ type: "me.setPreview", me: activeME, source: b.dataset.pvw })));
     }
 
     function renderCustomTab(body, mes, pages) {
@@ -689,7 +689,7 @@
                 }
             });
             persistPrefs();
-            sendAction({ type: "gangAction", targets: [...gangTargets], mode, auxPreviewMap: auxPayload });
+            sendAction({ type: "gang.execute", targets: [...gangTargets], mode, auxPreviewMap: auxPayload });
             render();
         };
 
@@ -699,11 +699,11 @@
 
         body.querySelectorAll("[data-c-row]").forEach(b => b.addEventListener("click", () => toggleBusRow(b.dataset.cRow, b.dataset.cRk, true)));
         body.querySelectorAll("[data-c-filter]").forEach(b => b.addEventListener("click", () => setBusFilter(b.dataset.cFilter, b.dataset.cPage)));
-        body.querySelectorAll("[data-c-cut]").forEach(b => b.addEventListener("click", () => sendAction({ type: "cut", me: Number(b.dataset.cCut) })));
-        body.querySelectorAll("[data-c-auto]").forEach(b => b.addEventListener("click", () => sendAction({ type: "auto", me: Number(b.dataset.cAuto) })));
-        body.querySelectorAll("[data-c-ftb]").forEach(b => b.addEventListener("click", () => sendAction({ type: "ftb", me: Number(b.dataset.cFtb) })));
-        body.querySelectorAll("[data-c-pgm]").forEach(b => b.addEventListener("click", () => sendAction({ type: "setProgram", me: Number(b.dataset.cPgm), source: b.dataset.src })));
-        body.querySelectorAll("[data-c-pvw]").forEach(b => b.addEventListener("click", () => sendAction({ type: "setPreview", me: Number(b.dataset.cPvw), source: b.dataset.src })));
+        body.querySelectorAll("[data-c-cut]").forEach(b => b.addEventListener("click", () => sendAction({ type: "me.cut", me: Number(b.dataset.cCut) })));
+        body.querySelectorAll("[data-c-auto]").forEach(b => b.addEventListener("click", () => sendAction({ type: "me.auto", me: Number(b.dataset.cAuto) })));
+        body.querySelectorAll("[data-c-ftb]").forEach(b => b.addEventListener("click", () => sendAction({ type: "me.ftb", me: Number(b.dataset.cFtb) })));
+        body.querySelectorAll("[data-c-pgm]").forEach(b => b.addEventListener("click", () => sendAction({ type: "me.setProgram", me: Number(b.dataset.cPgm), source: b.dataset.src })));
+        body.querySelectorAll("[data-c-pvw]").forEach(b => b.addEventListener("click", () => sendAction({ type: "me.setPreview", me: Number(b.dataset.cPvw), source: b.dataset.src })));
     }
 
     function renderDestTab(body, pages) {
@@ -738,7 +738,7 @@
                 </div>
             `).join("") || `<div class="muted">No Aux outputs on this switcher profile.</div>`);
             body.querySelectorAll("[data-dest-mode]").forEach(b => b.addEventListener("click", () => { destSubMode = b.dataset.destMode; persistPrefs(); render(); }));
-            body.querySelectorAll("[data-aux]").forEach(s => s.addEventListener("change", (e) => sendAction({ type: "setAux", aux: Number(s.dataset.aux), source: e.target.value })));
+            body.querySelectorAll("[data-aux]").forEach(s => s.addEventListener("change", (e) => sendAction({ type: "aux.setSource", aux: Number(s.dataset.aux), source: e.target.value })));
             return;
         }
 
@@ -875,10 +875,10 @@
 
         body.querySelectorAll("[data-ss-idx]").forEach(b => b.addEventListener("click", () => { activeSS = Number(b.dataset.ssIdx); persistPrefs(); render(); }));
         body.querySelector("#btnRemSSAnim")?.addEventListener("click", () => { ssAnimate = !ssAnimate; persistPrefs(); render(); });
-        body.querySelector("#selSSArt")?.addEventListener("change", (e) => sendAction({ type: "setSSArtSource", ss: ss.index, source: e.target.value }));
-        body.querySelectorAll("[data-ss-preset]").forEach(b => b.addEventListener("click", () => sendAction({ type: "applySSPreset", ss: ss.index, presetId: b.dataset.ssPreset, animate: ssAnimate })));
-        body.querySelectorAll("[data-ss-box-on]").forEach(b => b.addEventListener("click", () => sendAction({ type: "setSSBoxEnabled", ss: ss.index, box: Number(b.dataset.ssBoxOn) })));
-        body.querySelectorAll("[data-ss-box-src]").forEach(s => s.addEventListener("change", (e) => sendAction({ type: "setSSBoxSource", ss: ss.index, box: Number(s.dataset.ssBoxSrc), source: e.target.value })));
+        body.querySelector("#selSSArt")?.addEventListener("change", (e) => sendAction({ type: "ss.setArtSource", ss: ss.index, source: e.target.value }));
+        body.querySelectorAll("[data-ss-preset]").forEach(b => b.addEventListener("click", () => sendAction({ type: "ss.applyPreset", ss: ss.index, presetId: b.dataset.ssPreset, animate: ssAnimate })));
+        body.querySelectorAll("[data-ss-box-on]").forEach(b => b.addEventListener("click", () => sendAction({ type: "ss.setBoxEnabled", ss: ss.index, box: Number(b.dataset.ssBoxOn) })));
+        body.querySelectorAll("[data-ss-box-src]").forEach(s => s.addEventListener("change", (e) => sendAction({ type: "ss.setBoxSource", ss: ss.index, box: Number(s.dataset.ssBoxSrc), source: e.target.value })));
     }
 
     function renderDSKTab(body) {
@@ -902,10 +902,10 @@
                 </div>
             </div>
         `).join("") || `<div class="muted">No Downstream Keyers on this profile.</div>`;
-        body.querySelectorAll("[data-dsk-air]").forEach(b => b.addEventListener("click", () => sendAction({ type: "toggleDSK", dsk: Number(b.dataset.dskAir) })));
-        body.querySelectorAll("[data-dsk-auto]").forEach(b => b.addEventListener("click", () => sendAction({ type: "autoDSK", dsk: Number(b.dataset.dskAuto) })));
-        body.querySelectorAll("[data-dsk-tie]").forEach(b => b.addEventListener("click", () => sendAction({ type: "toggleDSKTie", dsk: Number(b.dataset.dskTie) })));
-        body.querySelectorAll("[data-dsk-fill]").forEach(s => s.addEventListener("change", (e) => sendAction({ type: "setDSKSource", dsk: Number(s.dataset.dskFill), source: e.target.value })));
+        body.querySelectorAll("[data-dsk-air]").forEach(b => b.addEventListener("click", () => sendAction({ type: "dsk.setOnAir", dsk: Number(b.dataset.dskAir) })));
+        body.querySelectorAll("[data-dsk-auto]").forEach(b => b.addEventListener("click", () => sendAction({ type: "dsk.auto", dsk: Number(b.dataset.dskAuto) })));
+        body.querySelectorAll("[data-dsk-tie]").forEach(b => b.addEventListener("click", () => sendAction({ type: "dsk.setTie", dsk: Number(b.dataset.dskTie) })));
+        body.querySelectorAll("[data-dsk-fill]").forEach(s => s.addEventListener("change", (e) => sendAction({ type: "dsk.setSource", dsk: Number(s.dataset.dskFill), source: e.target.value })));
     }
 
     function renderMacrosTab(body) {
@@ -940,7 +940,7 @@
             </div>
         `;
         body.querySelectorAll("[data-mbank]").forEach(b => b.addEventListener("click", () => { macroBank = b.dataset.mbank; persistPrefs(); render(); }));
-        body.querySelectorAll("[data-mac]").forEach(b => b.addEventListener("click", () => sendAction({ type: "runMacro", index: Number(b.dataset.mac) })));
+        body.querySelectorAll("[data-mac]").forEach(b => b.addEventListener("click", () => sendAction({ type: "macro.run", index: Number(b.dataset.mac) })));
     }
 
     function renderTallyTab(body, mes) {
