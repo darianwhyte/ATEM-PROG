@@ -1,1479 +1,582 @@
 // =========================================================================
 // VIEW 2: COMPOSE — UNIFIED VISUAL CANVAS STUDIO (js/ui/view-compose.js)
-// Clean visual composer for SuperSource 1-2, M/E 1-4 USKs & DSK 1-4:
-//   - Big unobstructed 16:9 interactive drag/resize/snap stage
-//   - Live Stage Feed (PGM / PVW) + non-destructive "Preview Selected" so
-//     off-air USKs/DSKs/Boxes give instant visual feedback without going live
-//   - Visual mini-wireframe SuperSource Layout Preset gallery + "+ Save Layout"
-//   - Calm 3-tab right inspector (Source & Key | Transform & Fly | Crop & Style)
+// Thin ES Module coordinator for SuperSource 1-2, M/E 1-4 USKs & DSK 1-4.
+// Stage rendering & pointer interactions live in ../compose/stage.js;
+// Inspector HTML & event wiring live in ../compose/inspector.js.
 // =========================================================================
 
-const ViewCompose = (() => {
-    const EDIT_MODE_KEY = "atem_prog_compose_edit_mode_v1";
-    let selectedWsId = null;     // workspace.id (4/5 = SS1/2, 0..3 = ME1..4)
-    let selectedTarget = { kind: "box", index: 0 }; // "box" | "art" | "bg" | "usk" | "dsk"
-    let inspectorTab = "source"; // "source" | "transform" | "style"
-    let stageBusMode = "program"; // "program" | "preview"
-    let composeEditMode = "live"; // "live" | "stage"
-    try {
-        const savedMode = localStorage.getItem(EDIT_MODE_KEY);
-        if (savedMode === "stage" || savedMode === "live") composeEditMode = savedMode;
-    } catch {}
-    let stagedDrafts = {};       // { [ws.id]: { data, dsks, dves } }
-    let previewSelected = true;   // Non-destructively preview the currently edited USK/DSK/Box even when off-air
-    let showGuides = true;
-    let showSafeArea = true;
-    let snapEnabled = true;
+import {
+    syncLiveStageOverlays as syncStageOverlays,
+    renderStageStatusHtml,
+    renderStageBoxesHtml,
+    wireCanvasDrag
+} from "../compose/stage.js";
+import { renderInspectorBodyHtml, wireInspectorControls } from "../compose/inspector.js";
 
-    function cloneObj(o) {
-        return JSON.parse(JSON.stringify(o));
+const EDIT_MODE_KEY = "atem_prog_compose_edit_mode_v1";
+let selectedWsId = null;     // workspace.id (4/5 = SS1/2, 0..3 = ME1..4)
+let selectedTarget = { kind: "box", index: 0 }; // "box" | "art" | "bg" | "usk" | "dsk"
+let inspectorTab = "source"; // "source" | "transform" | "style"
+let stageBusMode = "program"; // "program" | "preview"
+let composeEditMode = "live"; // "live" | "stage"
+try {
+    const savedMode = localStorage.getItem(EDIT_MODE_KEY);
+    if (savedMode === "stage" || savedMode === "live") composeEditMode = savedMode;
+} catch {}
+let stagedDrafts = {};       // { [ws.id]: { data, dsks, dves } }
+let previewSelected = true;   // Non-destructively preview the currently edited USK/DSK/Box even when off-air
+let showGuides = true;
+let showSafeArea = true;
+let snapEnabled = true;
+
+function cloneObj(o) {
+    return JSON.parse(JSON.stringify(o));
+}
+
+function isStageMode() {
+    return composeEditMode === "stage";
+}
+
+function setComposeEditMode(mode) {
+    composeEditMode = mode === "stage" ? "stage" : "live";
+    try { localStorage.setItem(EDIT_MODE_KEY, composeEditMode); } catch {}
+}
+
+function focusDSK(dskIndex = 0) {
+    selectedWsId = 0;
+    selectedTarget = { kind: "dsk", index: dskIndex };
+    inspectorTab = "source";
+}
+
+function resetSelection() {
+    selectedWsId = null;
+    selectedTarget = { kind: "box", index: 0 };
+    inspectorTab = "source";
+    stageBusMode = "program";
+    composeEditMode = "live";
+    stagedDrafts = {};
+}
+
+function ensureDraftForWs(liveWs) {
+    if (!liveWs) return null;
+    if (!stagedDrafts[liveWs.id]) {
+        stagedDrafts[liveWs.id] = {
+            data: cloneObj(liveWs.data),
+            dsks: liveWs.type === "me" ? cloneObj(state.dsks || []) : null,
+            dves: liveWs.type === "me" ? cloneObj(state.resources?.dves || []) : null
+        };
     }
+    return stagedDrafts[liveWs.id];
+}
 
-    function isStageMode() {
-        return composeEditMode === "stage";
-    }
+function getEditWs(liveWs) {
+    if (!liveWs || !isStageMode()) return liveWs;
+    const draft = ensureDraftForWs(liveWs);
+    return { ...liveWs, data: draft.data };
+}
 
-    function setComposeEditMode(mode) {
-        composeEditMode = mode === "stage" ? "stage" : "live";
-        try { localStorage.setItem(EDIT_MODE_KEY, composeEditMode); } catch {}
-    }
-
-    function focusDSK(dskIndex = 0) {
-        selectedWsId = 0;
-        selectedTarget = { kind: "dsk", index: dskIndex };
-        inspectorTab = "source";
-    }
-
-    function resetSelection() {
-        selectedWsId = null;
-        selectedTarget = { kind: "box", index: 0 };
-        inspectorTab = "source";
-        stageBusMode = "program";
-        composeEditMode = "live";
-        stagedDrafts = {};
-    }
-
-    function ensureDraftForWs(liveWs) {
-        if (!liveWs) return null;
-        if (!stagedDrafts[liveWs.id]) {
-            stagedDrafts[liveWs.id] = {
-                data: cloneObj(liveWs.data),
-                dsks: liveWs.type === "me" ? cloneObj(state.dsks || []) : null,
-                dves: liveWs.type === "me" ? cloneObj(state.resources?.dves || []) : null
-            };
-        }
-        return stagedDrafts[liveWs.id];
-    }
-
-    function getEditWs(liveWs) {
-        if (!liveWs || !isStageMode()) return liveWs;
+function getEditDSK(liveWs, dskIdx) {
+    if (isStageMode() && liveWs) {
         const draft = ensureDraftForWs(liveWs);
-        return { ...liveWs, data: draft.data };
+        return draft.dsks?.find(d => d.id === Number(dskIdx)) || draft.dsks?.[dskIdx] || null;
     }
+    return getDSK(dskIdx);
+}
 
-    function getEditDSK(liveWs, dskIdx) {
-        if (isStageMode() && liveWs) {
-            const draft = ensureDraftForWs(liveWs);
-            return draft.dsks?.find(d => d.id === Number(dskIdx)) || draft.dsks?.[dskIdx] || null;
-        }
-        return getDSK(dskIdx);
+function getEditCropHost(liveWs, layer, isSS) {
+    if (!layer) return null;
+    if (isSS) return layer;
+    const pool = isStageMode() ? ensureDraftForWs(liveWs)?.dves : state.resources?.dves;
+    return layer.dveId !== null && Array.isArray(pool) ? (pool.find(d => d.id === layer.dveId || d.assignedTo === layer.id) || null) : null;
+}
+
+function getAvailableWorkspaces() {
+    const ss = state.workspaces.filter(w => w.type === "superSource" && isWorkspaceAvailable(w));
+    const mes = state.workspaces.filter(w => w.type === "me" && isWorkspaceAvailable(w));
+    return [...ss, ...mes];
+}
+
+function getActiveComposeWs() {
+    const list = getAvailableWorkspaces();
+    let ws = list.find(w => w.id === selectedWsId);
+    if (!ws) {
+        ws = list[0] || state.workspaces[0];
+        selectedWsId = ws.id;
+        selectedTarget = ws.type === "superSource" ? { kind: "box", index: 0 } : { kind: "usk", index: 0 };
     }
+    return ws;
+}
 
-    function getEditCropHost(liveWs, layer, isSS) {
-        if (!layer) return null;
-        if (isSS) return layer;
-        const pool = isStageMode() ? ensureDraftForWs(liveWs)?.dves : state.resources?.dves;
-        return layer.dveId !== null && Array.isArray(pool) ? (pool.find(d => d.id === layer.dveId || d.assignedTo === layer.id) || null) : null;
+function isUskVisibleOnStage(ws, idx) {
+    const u = ws?.data?.usk?.[idx];
+    if (!u) return false;
+    if (stageBusMode === "preview") {
+        const ntFlag = !!(ws.data?.nextTransition?.usk?.[idx]);
+        return u.enabled !== ntFlag;
     }
+    return !!u.enabled;
+}
 
-    function getAvailableWorkspaces() {
-        const ss = state.workspaces.filter(w => w.type === "superSource" && isWorkspaceAvailable(w));
-        const mes = state.workspaces.filter(w => w.type === "me" && isWorkspaceAvailable(w));
-        return [...ss, ...mes];
+function isDskVisibleOnStage(idx, liveWs = null) {
+    const dsk = getEditDSK(liveWs, idx);
+    if (!dsk) return false;
+    if (stageBusMode === "preview") {
+        return dsk.enabled !== !!dsk.tie;
     }
+    return !!dsk.enabled;
+}
 
-    function getActiveComposeWs() {
-        const list = getAvailableWorkspaces();
-        let ws = list.find(w => w.id === selectedWsId);
-        if (!ws) {
-            ws = list[0] || state.workspaces[0];
-            selectedWsId = ws.id;
-            selectedTarget = ws.type === "superSource" ? { kind: "box", index: 0 } : { kind: "usk", index: 0 };
-        }
-        return ws;
+function isSelectedInLocalPreview(ws) {
+    if (!previewSelected || !ws) return false;
+    if (ws.type === "superSource" && selectedTarget.kind === "box") {
+        const b = ws.data.boxes?.[selectedTarget.index];
+        return !!(b && !b.enabled);
     }
-
-    function isUskVisibleOnStage(ws, idx) {
-        const u = ws?.data?.usk?.[idx];
-        if (!u) return false;
-        if (stageBusMode === "preview") {
-            const ntFlag = !!(ws.data?.nextTransition?.usk?.[idx]);
-            return u.enabled !== ntFlag;
-        }
-        return !!u.enabled;
-    }
-
-    function isDskVisibleOnStage(idx, liveWs = null) {
-        const dsk = getEditDSK(liveWs, idx);
-        if (!dsk) return false;
-        if (stageBusMode === "preview") {
-            return dsk.enabled !== !!dsk.tie;
-        }
-        return !!dsk.enabled;
-    }
-
-    function isSelectedInLocalPreview(ws) {
-        if (!previewSelected || !ws) return false;
-        if (ws.type === "superSource" && selectedTarget.kind === "box") {
-            const b = ws.data.boxes?.[selectedTarget.index];
-            return !!(b && !b.enabled);
-        }
-        if (ws.type === "me" && selectedTarget.kind === "usk") {
-            const u = ws.data.usk?.[selectedTarget.index];
-            return !!(u && !isUskVisibleOnStage(ws, selectedTarget.index));
-        }
-        if (ws.type === "me" && ws.resourceId === 0 && selectedTarget.kind === "dsk") {
-            const d = getEditDSK(ws, selectedTarget.index);
-            return !!(d && !isDskVisibleOnStage(selectedTarget.index, ws));
-        }
-        return false;
-    }
-
-    function buildSourceOptions(destType, selectedId, ws) {
-        const esc = AppUI.esc;
-        return getSourcesForDestination(destType, ws)
-            .map(s => `<option value="${esc(s.id)}" ${s.id === selectedId ? "selected" : ""}>${esc(getSourceDisplayName(s.id))}</option>`)
-            .join("");
-    }
-
-    function syncLiveStageOverlays() {
-        const liveWs = getActiveComposeWs();
-        const ws = getEditWs(liveWs);
-        const frame = document.getElementById("composeStageFrame");
-        if (!ws || !frame) return;
-
-        // Live-update stage box overlays without rebuilding DOM
-        if (ws.type === "superSource") {
-            (ws.data.boxes || []).forEach((b, idx) => {
-                const el = frame.querySelector(`[data-drag-kind="box"][data-drag-idx="${idx}"]`);
-                if (!el) return;
-                const r = atemToCanvas(b);
-                el.style.left = `${r.left}%`;
-                el.style.top = `${r.top}%`;
-                el.style.width = `${r.width}%`;
-                el.style.height = `${r.height}%`;
-            });
-        } else {
-            (ws.data.usk || []).forEach((u, idx) => {
-                const el = frame.querySelector(`[data-drag-kind="usk"][data-drag-idx="${idx}"]`);
-                if (!el) return;
-                const hasDve = u.keyType === "dve" || u.flyingKey;
-                const r = hasDve ? atemToCanvas(u) : { left: 0, top: 0, width: 100, height: 100 };
-                el.style.left = `${r.left}%`;
-                el.style.top = `${r.top}%`;
-                el.style.width = `${r.width}%`;
-                el.style.height = `${r.height}%`;
-            });
-        }
-
-        // Live-update mask guide overlay if present
-        const layer = getCurrentLayerObj(ws);
-        const maskEl = frame.querySelector("#composeMaskGuide");
-        if (maskEl && layer && layer.maskEnabled) {
-            const left = (layer.maskLeft || 0) / 180;
-            const right = (layer.maskRight || 0) / 180;
-            const top = (layer.maskTop || 0) / 180;
-            const bottom = (layer.maskBottom || 0) / 180;
-            maskEl.style.left = `${left}%`;
-            maskEl.style.top = `${top}%`;
-            maskEl.style.width = `${Math.max(0, 100 - left - right)}%`;
-            maskEl.style.height = `${Math.max(0, 100 - top - bottom)}%`;
-        }
-
-        // Live-update numeric slider readout labels in place
-        // Live-update numeric slider readout labels AND paired linked range thumbs in place
-        const setRo = (id, text) => {
-            const sp = document.querySelector(`[data-ro="${id}"]`);
-            if (sp) sp.textContent = text;
-        };
-        const syncRange = (selector, val) => {
-            const inp = document.querySelector(selector);
-            if (inp && document.activeElement !== inp) inp.value = String(val);
-        };
-        if (layer) {
-            if (layer.x !== undefined) setRo("posX", Number(layer.x || 0).toFixed(2));
-            if (layer.y !== undefined) setRo("posY", Number(layer.y || 0).toFixed(2));
-            if (layer.size !== undefined) setRo("scale", `${Math.round((layer.size ?? 0.5) * 100)}%`);
-            if (layer.x !== undefined) {
-                setRo("posX", Number(layer.x || 0).toFixed(2));
-                syncRange("#cmpPosX", layer.x ?? 0);
-            }
-            if (layer.y !== undefined) {
-                setRo("posY", Number(layer.y || 0).toFixed(2));
-                syncRange("#cmpPosY", layer.y ?? 0);
-            }
-            if (layer.size !== undefined) {
-                setRo("scale", `${Math.round((layer.size ?? 0.5) * 100)}%`);
-                syncRange("#cmpScale", layer.size ?? 0.5);
-            }
-            const ks = layer.keySettings || {};
-            if (ks.luma) { setRo("lumaClip", `${ks.luma.clip ?? 50}%`); setRo("lumaGain", `${ks.luma.gain ?? 50}%`); }
-            if (ks.linear) { setRo("linClip", `${ks.linear.clip ?? 50}%`); setRo("linGain", `${ks.linear.gain ?? 50}%`); }
-            if (ks.chroma) { setRo("chromaSpill", `${ks.chroma.spill ?? 50}%`); setRo("chromaCorr", `${ks.chroma.correction ?? 50}%`); }
-            if (ks.pattern) { setRo("patSize", `${ks.pattern.size ?? 50}%`); setRo("patSoft", `${ks.pattern.softness ?? 0}%`); }
-            const cropHost = ws.type === "superSource" ? layer : (layer.dveId !== null ? state.resources.dves.find(d => d.id === layer.dveId) : null);
-            if (cropHost) {
-                ["cropLeft", "cropRight", "cropTop", "cropBottom"].forEach(k => setRo(k, String(cropHost[k] || 0)));
-                ["cropLeft", "cropRight", "cropTop", "cropBottom"].forEach(k => {
-                    setRo(k, String(cropHost[k] || 0));
-                    syncRange(`[data-crop-edge="${k}"]`, cropHost[k] || 0);
-                });
-                setRo("borderW", `${cropHost.borderWidth || 2}px`);
-            }
-            ["maskLeft", "maskRight", "maskTop", "maskBottom"].forEach(k => setRo(k, String(layer[k] || 0)));
-            ["maskLeft", "maskRight", "maskTop", "maskBottom"].forEach(k => {
-                setRo(k, String(layer[k] || 0));
-                syncRange(`[data-mask-edge="${k}"]`, layer[k] || 0);
-            });
-            if (selectedTarget.kind === "dsk") {
-                setRo("dskClip", `${ks.linear?.clip ?? 50}%`);
-                setRo("dskGain", `${ks.linear?.gain ?? 50}%`);
-                ["maskLeft", "maskRight", "maskTop", "maskBottom"].forEach(k => setRo(`dsk_${k}`, String(layer[k] || 0)));
-                ["maskLeft", "maskRight", "maskTop", "maskBottom"].forEach(k => {
-                    setRo(`dsk_${k}`, String(layer[k] || 0));
-                    syncRange(`[data-dsk-mask="${k}"]`, layer[k] || 0);
-                });
-            }
-        }
-        if (ws.type === "superSource") {
-            setRo("artClip", `${ws.data.artClip ?? 50}%`);
-            setRo("artGain", `${ws.data.artGain ?? 50}%`);
-        }
-    }
-
-    function renderCanvas() {
-        const liveWs = getActiveComposeWs();
-        const canvas = document.getElementById("composeCanvas");
-        if (!canvas || !liveWs || typeof CanvasRenderer === "undefined") return;
-        const ctx = canvas.getContext("2d");
-        const draft = isStageMode() ? ensureDraftForWs(liveWs) : null;
-
-        if (liveWs.type === "superSource") {
-            const forceShowBoxIndex = (previewSelected && selectedTarget.kind === "box") ? selectedTarget.index : -1;
-            CanvasRenderer.renderSuperSource(ctx, liveWs, {
-                forceShowBoxIndex,
-                ...(draft ? { overrideData: draft.data } : {})
-            });
-        } else {
-            const forceShowUskIndex = (previewSelected && selectedTarget.kind === "usk") ? selectedTarget.index : -1;
-            const forceShowDskIndex = (previewSelected && liveWs.resourceId === 0 && selectedTarget.kind === "dsk") ? selectedTarget.index : -1;
-            CanvasRenderer.renderME(ctx, liveWs, {
-                mode: stageBusMode,
-                includeDSK: liveWs.resourceId === 0,
-                forceShowUskIndex,
-                forceShowDskIndex,
-                ...(draft ? { overrideWsData: draft.data, overrideDsks: draft.dsks } : {})
-            });
-        }
-    }
-
-    function getCurrentLayerObj(ws) {
-        if (ws.type === "superSource" && selectedTarget.kind === "box") {
-            return ws.data.boxes?.[selectedTarget.index] || null;
-        }
-        if (ws.type === "me" && selectedTarget.kind === "usk") {
-            return ws.data.usk?.[selectedTarget.index] || null;
-        }
-        if (selectedTarget.kind === "dsk") {
-            return getEditDSK(ws, selectedTarget.index);
-        }
-        return null;
-    }
-
-    function renderStageStatusHtml(ws) {
-        const esc = AppUI.esc;
-        const localPrev = isSelectedInLocalPreview(ws);
-
-        if (ws.type === "superSource") {
-            if (selectedTarget.kind === "art") {
-                return `
-                    <div class="compose-stage-status">
-                        <div class="field-row" style="gap:7px;">
-                            <span class="badge cyan">${esc(ws.name)} · ART</span>
-                            <span>${esc(ws.data.artPlace || "Background")} · ${esc(getSourceDisplayName(ws.data.artSource || ""))}</span>
-                        </div>
-                        <span class="muted">Select Boxes 1–4 to drag & resize</span>
-                    </div>
-                `;
-            }
-            const b = ws.data.boxes?.[selectedTarget.index];
-            return `
-                <div class="compose-stage-status ${localPrev ? "is-preview-override" : ""}">
-                    <div class="field-row" style="gap:7px;">
-                        <span class="badge ${b?.enabled ? "green" : "amber"}">Box ${selectedTarget.index + 1} · ${b?.enabled ? "ON" : (localPrev ? "OFF (Edit Preview)" : "OFF")}</span>
-                        <strong>${esc(getSourceDisplayName(b?.source || ""))}</strong>
-                        <span class="mono muted">X:${Number(b?.x || 0).toFixed(1)} Y:${Number(b?.y || 0).toFixed(1)} · ${Math.round((b?.size ?? 0.5) * 100)}%</span>
-                    </div>
-                    <span class="muted">${localPrev ? "Local preview only — enable Box to show live" : "Drag box or corner handle to transform"}</span>
-                </div>
-            `;
-        }
-
-        const busTag = stageBusMode === "preview" ? "PVW" : "PGM";
-        if (selectedTarget.kind === "bg") {
-            const bgSrc = stageBusMode === "preview" ? ws.data.previewSource : ws.data.source;
-            return `
-                <div class="compose-stage-status">
-                    <div class="field-row" style="gap:7px;">
-                        <span class="badge ${stageBusMode === "preview" ? "green" : "red"}">${esc(ws.name)} ${busTag} · BG</span>
-                        <strong>${esc(getSourceDisplayName(bgSrc || ""))}</strong>
-                    </div>
-                    <span class="muted">Pick USK 1–4 or DSK 1–4 on the right to compose keyers</span>
-                </div>
-            `;
-        }
-
-        if (selectedTarget.kind === "dsk") {
-            const dsk = getEditDSK(ws, selectedTarget.index);
-            const liveVis = isDskVisibleOnStage(selectedTarget.index, ws);
-            const statusLbl = dsk?.enabled ? "ON AIR" : (dsk?.tie ? "TIED (PVW)" : (localPrev ? "OFF AIR · Edit Preview" : "OFF AIR"));
-            return `
-                <div class="compose-stage-status ${localPrev ? "is-preview-override" : ""}">
-                    <div class="field-row" style="gap:7px;">
-                        <span class="badge ${dsk?.enabled ? "red" : (liveVis ? "green" : "amber")}">DSK ${selectedTarget.index + 1} · ${statusLbl}</span>
-                        <strong>Fill: ${esc(getSourceDisplayName(dsk?.source || ""))}</strong>
-                        ${dsk?.keySource ? `<span class="muted">Key: ${esc(getSourceShortName(dsk.keySource))}</span>` : ""}
-                    </div>
-                    <span class="muted">${localPrev ? "Previewing locally — live Program is untouched" : `${esc(ws.name)} ${busTag}`}</span>
-                </div>
-            `;
-        }
-
+    if (ws.type === "me" && selectedTarget.kind === "usk") {
         const u = ws.data.usk?.[selectedTarget.index];
-        const ntStaged = !!(ws.data?.nextTransition?.usk?.[selectedTarget.index]);
-        const hasDve = u && (u.keyType === "dve" || u.flyingKey);
-        const stateText = u?.enabled
-            ? "ON AIR"
-            : (ntStaged && stageBusMode === "preview")
-                ? "STAGED (PVW)"
-                : (localPrev ? "OFF AIR · Edit Preview" : "OFF AIR");
-        const stateClass = u?.enabled ? "red" : (ntStaged ? "green" : "amber");
-        const posSummary = hasDve ? `X:${Number(u.x || 0).toFixed(1)} Y:${Number(u.y || 0).toFixed(1)} · ${Math.round((u.size ?? 1) * 100)}%` : "Full-Frame Keyer";
+        return !!(u && !isUskVisibleOnStage(ws, selectedTarget.index));
+    }
+    if (ws.type === "me" && ws.resourceId === 0 && selectedTarget.kind === "dsk") {
+        const d = getEditDSK(ws, selectedTarget.index);
+        return !!(d && !isDskVisibleOnStage(selectedTarget.index, ws));
+    }
+    return false;
+}
 
-        return `
-            <div class="compose-stage-status ${localPrev ? "is-preview-override" : ""}">
-                <div class="field-row" style="gap:7px; flex-wrap:wrap;">
-                    <span class="badge ${stateClass}">USK ${selectedTarget.index + 1} · ${stateText}</span>
-                    <span class="badge cyan">${esc((u?.keyType || "luma").toUpperCase())}${u?.flyingKey && u?.keyType !== "dve" ? " + FLY" : ""}</span>
-                    <strong>${esc(getSourceDisplayName(u?.source || ""))}</strong>
-                    <span class="mono muted">${posSummary}</span>
-                </div>
-                <span class="muted">${localPrev ? "Previewing off-air USK locally — live output is safe" : (hasDve ? "Drag box or corner handle" : "Switch to DVE / Flying Key to drag")}</span>
-            </div>
+function getCurrentLayerObj(ws) {
+    if (ws.type === "superSource" && selectedTarget.kind === "box") {
+        return ws.data.boxes?.[selectedTarget.index] || null;
+    }
+    if (ws.type === "me" && selectedTarget.kind === "usk") {
+        return ws.data.usk?.[selectedTarget.index] || null;
+    }
+    if (selectedTarget.kind === "dsk") {
+        return getEditDSK(ws, selectedTarget.index);
+    }
+    return null;
+}
+
+function renderCanvas() {
+    const liveWs = getActiveComposeWs();
+    const canvas = document.getElementById("composeCanvas");
+    if (!canvas || !liveWs || typeof CanvasRenderer === "undefined") return;
+    const ctx = canvas.getContext("2d");
+    const draft = isStageMode() ? ensureDraftForWs(liveWs) : null;
+
+    if (liveWs.type === "superSource") {
+        const forceShowBoxIndex = (previewSelected && selectedTarget.kind === "box") ? selectedTarget.index : -1;
+        CanvasRenderer.renderSuperSource(ctx, liveWs, {
+            forceShowBoxIndex,
+            ...(draft ? { overrideData: draft.data } : {})
+        });
+    } else {
+        const forceShowUskIndex = (previewSelected && selectedTarget.kind === "usk") ? selectedTarget.index : -1;
+        const forceShowDskIndex = (previewSelected && liveWs.resourceId === 0 && selectedTarget.kind === "dsk") ? selectedTarget.index : -1;
+        CanvasRenderer.renderME(ctx, liveWs, {
+            mode: stageBusMode,
+            includeDSK: liveWs.resourceId === 0,
+            forceShowUskIndex,
+            forceShowDskIndex,
+            ...(draft ? { overrideWsData: draft.data, overrideDsks: draft.dsks } : {})
+        });
+    }
+}
+
+const composeCtx = {
+    getSelectedTarget: () => selectedTarget,
+    setSelectedTarget: (t) => { selectedTarget = t; },
+    getInspectorTab: () => inspectorTab,
+    getStageBusMode: () => stageBusMode,
+    isPreviewSelected: () => previewSelected,
+    getShowGuides: () => showGuides,
+    getSnapEnabled: () => snapEnabled,
+    isStageMode,
+    getActiveComposeWs,
+    getEditWs,
+    getEditDSK,
+    getEditCropHost,
+    getCurrentLayerObj,
+    isUskVisibleOnStage,
+    isDskVisibleOnStage,
+    isSelectedInLocalPreview,
+    render,
+    renderCanvas,
+    syncLiveStageOverlays
+};
+
+function syncLiveStageOverlays() {
+    syncStageOverlays(composeCtx);
+}
+
+function commitDraftToLive(liveWs, { animate = false } = {}) {
+    const draft = stagedDrafts[liveWs?.id];
+    if (!liveWs || !draft) return;
+
+    if (liveWs.type === "superSource") {
+        SwitcherEngine.commitSuperSourceState(liveWs, draft.data, { animate });
+        AppUI.toast(`${animate ? "Animating" : "Cut"} staged ${liveWs.name} to Live`, "ok");
+        return;
+    }
+
+    // Commit M/E USKs and DSKs cleanly through SwitcherEngine
+    if (Array.isArray(draft.data?.usk)) {
+        draft.data.usk.forEach((u, idx) => {
+            if (!liveWs.data.usk?.[idx]) return;
+            SwitcherEngine.setLayerSource(liveWs, idx, u.source || "", "usk");
+            SwitcherEngine.setLayerEnabled(liveWs, idx, !!u.enabled, "usk", true);
+            SwitcherEngine.setLayerPosition(liveWs, idx, u.x ?? 0, u.y ?? 0, "usk");
+            SwitcherEngine.setLayerSize(liveWs, idx, u.size ?? 0.5, "usk");
+            const draftDve = u.dveId !== null ? draft.dves?.find(d => d.id === u.dveId) : null;
+            if (draftDve) {
+                SwitcherEngine.setLayerCropEnabled(liveWs, idx, !!draftDve.cropEnabled, "usk");
+                ["left", "right", "top", "bottom"].forEach(edge => {
+                    const key = `crop${edge[0].toUpperCase()}${edge.slice(1)}`;
+                    SwitcherEngine.setLayerCropEdge(liveWs, idx, edge, draftDve[key] || 0, "usk");
+                });
+            }
+        });
+    }
+    if (liveWs.resourceId === 0 && Array.isArray(draft.dsks)) {
+        draft.dsks.forEach((d, idx) => {
+            SwitcherEngine.setDSKFill(idx, d.source || "");
+            SwitcherEngine.setDSKKey(idx, d.keySource || "");
+            SwitcherEngine.setDSKEnabled(idx, !!d.enabled);
+            SwitcherEngine.setDSKTie(idx, !!d.tie);
+            SwitcherEngine.setDSKRate(idx, d.rate || 25);
+        });
+    }
+    AppUI.toast(`Cut staged ${liveWs.name} to Live`, "ok");
+}
+
+function render(container) {
+    const savedInspTop = container.querySelector(".inspector-body")?.scrollTop || 0;
+    const savedTrayLeft = container.querySelector(".ss-preset-tray")?.scrollLeft || 0;
+    const esc = AppUI.esc;
+    const wsList = getAvailableWorkspaces();
+    const liveWs = getActiveComposeWs();
+    const ws = getEditWs(liveWs);
+    const staging = isStageMode();
+    const profile = getProfile() || {};
+    const maxUsks = getUpstreamKeyersPerME(profile);
+    const draftObj = staging ? ensureDraftForWs(liveWs) : null;
+    const dsks = (staging && liveWs.type === "me" && draftObj?.dsks)
+        ? draftObj.dsks.slice(0, getAvailableDSKs().length)
+        : getAvailableDSKs();
+    const presets = ShowTemplates.getAllSSPresets();
+    const animCfg = typeof SwitcherEngine?.getSSAnimSettings === "function"
+        ? SwitcherEngine.getSSAnimSettings()
+        : { enabled: true, durationMs: 600, easing: "easeInOut", offBoxMode: "shrink" };
+
+    const layerPillsHtml = ws.type === "superSource"
+        ? `
+            ${(ws.data.boxes || []).map((b, i) => `
+                <button class="layer-pill ${selectedTarget.kind === "box" && selectedTarget.index === i ? "active" : ""}" data-lkind="box" data-lidx="${i}">
+                    <span class="dot ${b.enabled ? "on" : ""}"></span>Box ${i + 1}
+                </button>
+            `).join("")}
+            <button class="layer-pill ${selectedTarget.kind === "art" ? "active" : ""}" data-lkind="art" data-lidx="0">Art</button>
+        `
+        : `
+            <button class="layer-pill ${selectedTarget.kind === "bg" ? "active" : ""}" data-lkind="bg" data-lidx="0">BG</button>
+            ${(ws.data.usk || []).slice(0, maxUsks).map((u, i) => {
+                const ntFlag = !!(ws.data?.nextTransition?.usk?.[i]);
+                const dotClass = u.enabled ? "air" : (ntFlag ? "on" : "");
+                return `
+                    <button class="layer-pill ${selectedTarget.kind === "usk" && selectedTarget.index === i ? "active" : ""}" data-lkind="usk" data-lidx="${i}">
+                        <span class="dot ${dotClass}"></span>USK ${i + 1}
+                    </button>
+                `;
+            }).join("")}
+            ${ws.resourceId === 0 ? dsks.map(d => `
+                <button class="layer-pill ${selectedTarget.kind === "dsk" && selectedTarget.index === d.id ? "active" : ""}" data-lkind="dsk" data-lidx="${d.id}">
+                    <span class="dot ${d.enabled ? "air" : (d.tie ? "on" : "")}"></span>DSK ${d.id + 1}
+                </button>
+            `).join("") : ""}
         `;
-    }
 
-    function renderStageBoxesHtml(ws) {
-        if (!showGuides) return "";
-        const esc = AppUI.esc;
-        const items = [];
+    const showTabs = selectedTarget.kind === "box" || selectedTarget.kind === "usk" || selectedTarget.kind === "dsk";
+    const activeClips = typeof CanvasRenderer !== "undefined" && typeof CanvasRenderer.getActiveMediaPlayerClips === "function"
+        ? CanvasRenderer.getActiveMediaPlayerClips()
+        : [];
+    const freeDves = ((staging ? draftObj?.dves : state.resources?.dves) || []).filter(d => d.assignedTo === null).length;
 
-        if (ws.type === "superSource") {
-            const boxes = ws.data.boxes || [];
-            // Box 4 at bottom (z=7) -> Box 1 on top (z=10), selected jumps above (z=20)
-            for (let idx = boxes.length - 1; idx >= 0; idx--) {
-                const b = boxes[idx];
-                const isSel = selectedTarget.kind === "box" && selectedTarget.index === idx;
-                const showThis = b.enabled || (isSel && previewSelected);
-                if (!showThis) continue;
-                const rect = atemToCanvas(b);
-                const zIdx = isSel ? 20 : (10 - idx);
-                items.push(`
-                    <div class="stage-box ${isSel ? "selected" : ""} ${!b.enabled ? "off-air-preview" : ""}" data-drag-kind="box" data-drag-idx="${idx}"
-                         style="left:${rect.left}%; top:${rect.top}%; width:${rect.width}%; height:${rect.height}%; z-index:${zIdx};">
-                        <span class="stage-box-tag">B${idx + 1} · ${esc(getSourceShortName(b.source))}${!b.enabled ? " (PREVIEW)" : ""}</span>
-                        ${isSel ? `<div class="stage-resize-handle" data-resize-kind="box" data-resize-idx="${idx}"></div>` : ""}
-                    </div>
-                `);
-            }
-        } else {
-            const maxUsks = getUpstreamKeyersPerME(getProfile());
-            (ws.data.usk || []).slice(0, maxUsks).forEach((u, idx) => {
-                const isSel = selectedTarget.kind === "usk" && selectedTarget.index === idx;
-                const visibleLive = isUskVisibleOnStage(ws, idx);
-                const showThis = visibleLive || (isSel && previewSelected);
-                if (!showThis) return;
-                const hasDve = u.keyType === "dve" || u.flyingKey;
-                const rect = hasDve ? atemToCanvas(u) : { left: 0, top: 0, width: 100, height: 100 };
-                items.push(`
-                    <div class="stage-box ${isSel ? "selected" : ""} ${!visibleLive ? "off-air-preview" : ""} ${!hasDve ? "fullscreen-key" : ""}" data-drag-kind="usk" data-drag-idx="${idx}"
-                         style="left:${rect.left}%; top:${rect.top}%; width:${rect.width}%; height:${rect.height}%; ${hasDve ? "" : "cursor:pointer;"}">
-                        ${isSel && hasDve ? `<div class="stage-resize-handle" data-resize-kind="usk" data-resize-idx="${idx}"></div>` : ""}
-                    </div>
-                `);
-            });
-
-            // Show interactive Mask inset rectangle when editing a masked USK or DSK
-            const activeLayer = getCurrentLayerObj(ws);
-            if (activeLayer && activeLayer.maskEnabled && (selectedTarget.kind === "usk" || selectedTarget.kind === "dsk")) {
-                const left = (activeLayer.maskLeft || 0) / 180;
-                const right = (activeLayer.maskRight || 0) / 180;
-                const top = (activeLayer.maskTop || 0) / 180;
-                const bottom = (activeLayer.maskBottom || 0) / 180;
-                items.push(`
-                    <div id="composeMaskGuide" class="stage-mask-guide"
-                         style="left:${left}%; top:${top}%; width:${Math.max(0, 100 - left - right)}%; height:${Math.max(0, 100 - top - bottom)}%;">
-                    </div>
-                `);
-            }
-        }
-        return items.join("");
-    }
-
-    function renderInspectorBodyHtml(ws) {
-        const esc = AppUI.esc;
-
-        // SuperSource ART target
-        if (ws.type === "superSource" && selectedTarget.kind === "art") {
-            const d = ws.data;
-            return `
-                <div class="field">
-                    <label for="cmpArtSrc">Art Fill Source</label>
-                    <select id="cmpArtSrc">${buildSourceOptions("superSourceArt", d.artSource || "", ws)}</select>
-                </div>
-                <div class="field">
-                    <label for="cmpArtPlace">Art Placement</label>
-                    <select id="cmpArtPlace">
-                        <option value="Background" ${d.artPlace !== "Foreground" ? "selected" : ""}>Background (Behind Boxes)</option>
-                        <option value="Foreground" ${d.artPlace === "Foreground" ? "selected" : ""}>Foreground (Overlay / Cutout)</option>
-                    </select>
-                </div>
-                ${d.artPlace === "Foreground" ? `
-                    <div class="field">
-                        <label for="cmpArtKey">Art Key Source</label>
-                        <select id="cmpArtKey">${buildSourceOptions("key", d.artKeySource || "", ws)}</select>
-                    </div>
-                    <label class="check-row"><input type="checkbox" id="cmpArtPre" ${d.artPremultiplied ? "checked" : ""}> Pre-Multiplied Key</label>
-                    <label class="check-row"><input type="checkbox" id="cmpArtInv" ${d.artInvert ? "checked" : ""}> Invert Key</label>
-                    <div class="field">
-                        <label>Clip <span class="mono" data-ro="artClip">${d.artClip ?? 50}%</span></label>
-                        <input type="range" id="cmpArtClip" min="0" max="100" value="${d.artClip ?? 50}">
-                    </div>
-                    <div class="field">
-                        <label>Gain <span class="mono" data-ro="artGain">${d.artGain ?? 50}%</span></label>
-                        <input type="range" id="cmpArtGain" min="0" max="100" value="${d.artGain ?? 50}">
-                    </div>
-                ` : ""}
-            `;
-        }
-
-        // M/E Background target
-        if (ws.type === "me" && selectedTarget.kind === "bg") {
-            const d = ws.data;
-            return `
-                <div class="field">
-                    <label for="cmpMePgm">Program Background</label>
-                    <select id="cmpMePgm">${buildSourceOptions("me", d.source || "", ws)}</select>
-                </div>
-                <div class="field">
-                    <label for="cmpMePvw">Preview Background</label>
-                    <select id="cmpMePvw">${buildSourceOptions("me", d.previewSource || "", ws)}</select>
-                </div>
-                <div class="field-row" style="padding-top:6px;">
-                    <button class="btn btn-pgm solid" id="cmpMeCut" style="flex:1;">CUT</button>
-                    <button class="btn btn-amber solid" id="cmpMeAuto" style="flex:1;">AUTO</button>
-                </div>
-            `;
-        }
-
-        // DSK target
-        if (selectedTarget.kind === "dsk") {
-            const dsk = getEditDSK(ws, selectedTarget.index);
-            if (!dsk) return "";
-            if (inspectorTab === "style") {
-                return `
-                    <label class="check-row"><input type="checkbox" id="cmpDskMaskEn" ${dsk.maskEnabled ? "checked" : ""}> Enable DSK Mask</label>
-                    ${dsk.maskEnabled ? `
-                        <label class="check-row"><input type="checkbox" id="cmpDskMaskLink" ${dsk.maskLinked ? "checked" : ""}> Link Opposite Edges</label>
-                        ${[["maskLeft", "Left"], ["maskRight", "Right"], ["maskTop", "Top"], ["maskBottom", "Bottom"]].map(([k, lbl]) => `
-                            <div class="field">
-                                <label>Mask ${lbl} <span class="mono" data-ro="dsk_${k}">${dsk[k] || 0}</span></label>
-                                <input type="range" data-dsk-mask="${k}" min="0" max="18000" value="${dsk[k] || 0}">
-                            </div>
+    container.innerHTML = `
+        <div class="compose-view">
+            <div class="subbar">
+                <div class="field-row" style="gap:10px; flex-wrap:wrap;">
+                    <div class="seg">
+                        ${wsList.map(w => `
+                            <button class="seg-item ${w.id === liveWs.id ? "active" : ""}" data-cws="${w.id}">${esc(w.name)}</button>
                         `).join("")}
-                    ` : `<p class="muted" style="font-size:12px;">Enable Mask to crop DSK boundaries.</p>`}
-                `;
-            }
-            const lin = dsk.keySettings?.linear || { premultiplied: true, clip: 50, gain: 50, invert: false };
-            return `
-                <div class="field-row" style="gap:6px;">
-                    <button class="btn ${dsk.enabled ? "btn-pgm solid" : ""}" id="cmpDskAir" style="flex:1;">${dsk.enabled ? "ON AIR" : "Off Air"}</button>
-                    <button class="btn btn-amber" id="cmpDskAuto">AUTO</button>
-                    <button class="btn ${dsk.tie ? "btn-accent-soft" : ""}" id="cmpDskTie">TIE</button>
-                </div>
-                <div class="field">
-                    <label for="cmpDskFill">Fill Source</label>
-                    <select id="cmpDskFill">${buildSourceOptions("dsk", dsk.source || "")}</select>
-                </div>
-                <div class="field">
-                    <label for="cmpDskKey">Key Source</label>
-                    <select id="cmpDskKey">${buildSourceOptions("dsk", dsk.keySource || "")}</select>
-                </div>
-                <div class="field">
-                    <label for="cmpDskRate">Auto Fade Rate (Frames)</label>
-                    <input type="number" id="cmpDskRate" min="1" max="250" value="${dsk.rate || 25}">
-                </div>
-                <label class="check-row"><input type="checkbox" id="cmpDskPre" ${lin.premultiplied ? "checked" : ""}> Pre-Multiplied</label>
-                <label class="check-row"><input type="checkbox" id="cmpDskInv" ${lin.invert ? "checked" : ""}> Invert Key</label>
-                <div class="field">
-                    <label>Clip <span class="mono" data-ro="dskClip">${lin.clip ?? 50}%</span></label>
-                    <input type="range" id="cmpDskClip" min="0" max="100" value="${lin.clip ?? 50}">
-                </div>
-                <div class="field">
-                    <label>Gain <span class="mono" data-ro="dskGain">${lin.gain ?? 50}%</span></label>
-                    <input type="range" id="cmpDskGain" min="0" max="100" value="${lin.gain ?? 50}">
-                </div>
-            `;
-        }
-
-        // SuperSource BOX or M/E USK target
-        const layer = getCurrentLayerObj(ws);
-        if (!layer) return "";
-        const isSS = ws.type === "superSource";
-        const hasDve = isSS || layer.keyType === "dve" || layer.flyingKey;
-        const dveObj = getEditCropHost(ws, layer, isSS);
-        const ntStaged = !isSS && !!(ws.data?.nextTransition?.usk?.[selectedTarget.index]);
-        const bgSourceId = !isSS ? (stageBusMode === "preview" ? ws.data.previewSource : ws.data.source) : "";
-        const sameAsBg = !isSS && layer.source && layer.source === bgSourceId;
-
-        if (inspectorTab === "source") {
-            const ks = layer.keySettings || {};
-            return `
-                ${isSS ? `
-                    <label class="check-row" style="padding:8px 10px; border-radius:6px; background:var(--bg-elevated); border:1px solid var(--border);">
-                        <input type="checkbox" id="cmpLayerEnabled" ${layer.enabled ? "checked" : ""}>
-                        <strong>Box ${selectedTarget.index + 1} Enabled</strong>
-                    </label>
-                ` : `
-                    <div class="field-row" style="gap:6px;">
-                        <button class="btn ${layer.enabled ? "btn-pgm solid" : ""}" id="cmpUskOnAirBtn" style="flex:1;">
-                            USK ${selectedTarget.index + 1} ${layer.enabled ? "ON AIR" : "Off Air"}
-                        </button>
-                        <button class="btn ${ntStaged ? "btn-amber solid" : ""}" id="cmpUskStageBtn" title="Include USK ${selectedTarget.index + 1} in Next Transition (shows on PVW)">
-                            Next Trans
-                        </button>
                     </div>
-                `}
-
-                <div class="field">
-                    <label for="cmpLayerSource">Fill Source</label>
-                    <select id="cmpLayerSource">${buildSourceOptions(isSS ? "superSourceBox" : "usk", layer.source || "", ws)}</select>
-                </div>
-
-                ${sameAsBg ? `
-                    <div style="padding:7px 9px; border-radius:6px; background:var(--amber-bg); border:1px solid var(--amber-border); color:var(--amber-text); font-size:11px; line-height:1.35;">
-                        Fill Source matches the ${stageBusMode === "preview" ? "PVW" : "PGM"} background (${esc(getSourceShortName(layer.source))}). Pick a different Fill Source (e.g. Media Player 1 or another Camera) to see the key clearly.
+                    <div class="seg" title="Live edits the ATEM immediately; Offline Stage lets you compose safely without affecting live ATEM until you push">
+                        <button class="seg-item ${!staging ? "active" : ""}" id="btnCmpModeLive" data-cmp-mode="live">Live</button>
+                        <button class="seg-item ${staging ? "active" : ""}" id="btnCmpModeStage" data-cmp-mode="stage">Offline Stage</button>
                     </div>
-                ` : ""}
-
-                ${!isSS ? `
-                    <div class="field">
-                        <label for="cmpKeyType">Key Type</label>
-                        <select id="cmpKeyType">
-                            ${["luma", "linear", "chroma", "pattern", "dve"].map(kt => `
-                                <option value="${kt}" ${layer.keyType === kt ? "selected" : ""}>${kt.toUpperCase()}</option>
-                            `).join("")}
-                        </select>
-                    </div>
-                    ${layer.keyType !== "dve" ? `
-                        <label class="check-row">
-                            <input type="checkbox" id="cmpFlyingKey" ${layer.flyingKey ? "checked" : ""}>
-                            Flying Key (Allocates 1 DVE)
-                        </label>
-                    ` : ""}
-                    ${layer.keyType === "luma" ? `
-                        <div class="field"><label>Clip <span class="mono" data-ro="lumaClip">${ks.luma?.clip ?? 50}%</span></label><input type="range" id="cmpLumaClip" min="0" max="100" value="${ks.luma?.clip ?? 50}"></div>
-                        <div class="field"><label>Gain <span class="mono" data-ro="lumaGain">${ks.luma?.gain ?? 50}%</span></label><input type="range" id="cmpLumaGain" min="0" max="100" value="${ks.luma?.gain ?? 50}"></div>
-                        <label class="check-row"><input type="checkbox" id="cmpLumaInv" ${ks.luma?.invert ? "checked" : ""}> Invert Luma</label>
-                    ` : ""}
-                    ${layer.keyType === "linear" ? `
-                        <div class="field">
-                            <label for="cmpKeySrc">Key / Matte Source</label>
-                            <select id="cmpKeySrc">${buildSourceOptions("key", ks.linear?.keySource || "", ws)}</select>
+                    ${ws.type === "me" ? `
+                        <div class="seg" title="Switch stage background between Program (PGM) and Preview (PVW)">
+                            <button class="seg-item ${stageBusMode === "program" ? "active" : ""}" data-stage-bus="program">PGM</button>
+                            <button class="seg-item ${stageBusMode === "preview" ? "active" : ""}" data-stage-bus="preview">PVW</button>
                         </div>
-                        <label class="check-row"><input type="checkbox" id="cmpLinPre" ${ks.linear?.premultiplied ? "checked" : ""}> Pre-Multiplied</label>
-                        <div class="field"><label>Clip <span class="mono" data-ro="linClip">${ks.linear?.clip ?? 50}%</span></label><input type="range" id="cmpLinClip" min="0" max="100" value="${ks.linear?.clip ?? 50}"></div>
-                        <div class="field"><label>Gain <span class="mono" data-ro="linGain">${ks.linear?.gain ?? 50}%</span></label><input type="range" id="cmpLinGain" min="0" max="100" value="${ks.linear?.gain ?? 50}"></div>
                     ` : ""}
-                    ${layer.keyType === "chroma" ? `
-                        <div class="field-row" style="justify-content:space-between;">
-                            <span style="font-size:12px;">Key Colour</span>
-                            <input type="color" id="cmpChromaCol" value="${esc(ks.chroma?.sampleColor || "#00ff00")}">
-                        </div>
-                        <div class="field"><label>Spill Suppression <span class="mono" data-ro="chromaSpill">${ks.chroma?.spill ?? 50}%</span></label><input type="range" id="cmpChromaSpill" min="0" max="100" value="${ks.chroma?.spill ?? 50}"></div>
-                        <div class="field"><label>Chroma Correction <span class="mono" data-ro="chromaCorr">${ks.chroma?.correction ?? 50}%</span></label><input type="range" id="cmpChromaCorr" min="0" max="100" value="${ks.chroma?.correction ?? 50}"></div>
-                    ` : ""}
-                    ${layer.keyType === "pattern" ? `
-                        <div class="field">
-                            <label for="cmpPatType">Pattern Shape</label>
-                            <select id="cmpPatType">
-                                ${["box", "circle", "diamond", "horizontal", "vertical"].map(pt => `<option value="${pt}" ${ks.pattern?.pattern === pt ? "selected" : ""}>${pt}</option>`).join("")}
-                            </select>
-                        </div>
-                        <div class="field"><label>Size <span class="mono" data-ro="patSize">${ks.pattern?.size ?? 50}%</span></label><input type="range" id="cmpPatSize" min="0" max="100" value="${ks.pattern?.size ?? 50}"></div>
-                        <div class="field"><label>Softness <span class="mono" data-ro="patSoft">${ks.pattern?.softness ?? 0}%</span></label><input type="range" id="cmpPatSoft" min="0" max="100" value="${ks.pattern?.softness ?? 0}"></div>
-                    ` : ""}
-                ` : ""}
-            `;
-        }
-
-        if (inspectorTab === "transform") {
-            if (!hasDve) {
-                return `
-                    <p class="muted" style="font-size:12px;">
-                        Switch Key Type to <strong>DVE</strong> or enable <strong>Flying Key</strong> in Source & Key to unlock X/Y/Scale transforms and Keyframes A/B.
-                    </p>
-                    <div class="field-row" style="gap:6px;">
-                        <button class="btn btn-sm btn-accent-soft" id="cmpQuickEnableDve" style="flex:1;">Switch to DVE</button>
-                        <button class="btn btn-sm" id="cmpQuickEnableFly" style="flex:1;">Enable Flying Key</button>
-                    </div>
-                `;
-            }
-            return `
-                <div class="field">
-                    <label>Position X <span class="mono" data-ro="posX">${Number(layer.x || 0).toFixed(2)}</span></label>
-                    <input type="range" id="cmpPosX" min="-16" max="16" step="0.1" value="${layer.x ?? 0}">
-                </div>
-                <div class="field">
-                    <label>Position Y <span class="mono" data-ro="posY">${Number(layer.y || 0).toFixed(2)}</span></label>
-                    <input type="range" id="cmpPosY" min="-9" max="9" step="0.1" value="${layer.y ?? 0}">
-                </div>
-                <div class="field">
-                    <label>Scale <span class="mono" data-ro="scale">${Math.round((layer.size ?? 0.5) * 100)}%</span></label>
-                    <input type="range" id="cmpScale" min="0.1" max="1" step="0.01" value="${layer.size ?? 0.5}">
-                </div>
-                <button class="btn btn-sm" id="cmpResetTransform">Center / Full Screen</button>
-
-                ${!isSS ? `
-                    <div style="padding-top:10px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:8px;">
-                        <div class="field-row" style="justify-content:space-between;">
-                            <span class="section-label">Flying Key Keyframes</span>
-                            <div class="field-row" style="gap:4px;">
-                                <span class="muted" style="font-size:10px;">Rate</span>
-                                <input type="number" id="cmpFlyRate" min="1" max="250" value="${layer.flyRate || 25}" style="width:56px; padding:2px 5px; font-size:11px;">
-                            </div>
-                        </div>
-                        <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:6px;">
-                            <button class="btn btn-sm" id="cmpSetA">Set Keyframe A ${layer.keyframeA ? "●" : ""}</button>
-                            <button class="btn btn-sm" id="cmpSetB">Set Keyframe B ${layer.keyframeB ? "●" : ""}</button>
-                            <button class="btn btn-sm btn-accent-soft" id="cmpRunA" ${layer.keyframeA ? "" : "disabled"}>▶ Run A</button>
-                            <button class="btn btn-sm btn-accent-soft" id="cmpRunB" ${layer.keyframeB ? "" : "disabled"}>▶ Run B</button>
-                        </div>
-                        <button class="btn btn-sm" id="cmpRunFull">▶ Run Full Screen</button>
-                    </div>
-                ` : ""}
-            `;
-        }
-
-        // Crop & Style tab
-        const cropHost = isSS ? layer : dveObj;
-        return `
-            ${cropHost ? `
-                <span class="section-label">Crop</span>
-                <label class="check-row"><input type="checkbox" id="cmpCropEn" ${cropHost.cropEnabled ? "checked" : ""}> Enable Crop</label>
-                ${cropHost.cropEnabled ? `
-                    <label class="check-row"><input type="checkbox" id="cmpCropLink" ${cropHost.cropLinked ? "checked" : ""}> Link Opposite Edges</label>
-                    ${[["cropLeft", "Left"], ["cropRight", "Right"], ["cropTop", "Top"], ["cropBottom", "Bottom"]].map(([k, lbl]) => `
-                        <div class="field">
-                            <label>Crop ${lbl} <span class="mono" data-ro="${k}">${cropHost[k] || 0}</span></label>
-                            <input type="range" data-crop-edge="${k}" min="0" max="18000" value="${cropHost[k] || 0}">
+                    ${activeClips.map(({ mpNum, item, isLive }) => `
+                        <div class="clip-transport-pill ${item.playing === true ? "playing" : ""}" title="${esc(item.name)} (${isLive ? "Live on air" : "Cued"})">
+                            <span class="mono" style="font-size:10px; font-weight:700;">🎬 MP${mpNum}</span>
+                            ${isLive ? `<span class="badge red" style="padding:1px 5px;">LIVE</span>` : ""}
+                            <button class="btn btn-xs ${item.playing === true ? "btn-pvw solid" : ""}" data-cmp-clip-toggle="${item.id}" title="${item.playing === true ? "Pause Clip" : "Play Clip"}">${item.playing === true ? "⏸" : "▶"}</button>
+                            <button class="btn btn-xs" data-cmp-clip-stop="${item.id}" title="Stop & rewind clip to 0:00">⏹</button>
                         </div>
                     `).join("")}
-                ` : ""}
-
-                <div style="padding-top:10px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:8px;">
-                    <span class="section-label">Border</span>
-                    <label class="check-row"><input type="checkbox" id="cmpBorderEn" ${cropHost.borderEnabled ? "checked" : ""}> Enable Border</label>
-                    ${cropHost.borderEnabled ? `
-                        <div class="field">
-                            <label>Width <span class="mono" data-ro="borderW">${cropHost.borderWidth || 2}px</span></label>
-                            <input type="range" id="cmpBorderW" min="1" max="20" value="${cropHost.borderWidth || 2}">
-                        </div>
-                        <div class="field-row" style="justify-content:space-between;">
-                            <span style="font-size:12px;">Border Colour</span>
-                            <input type="color" id="cmpBorderCol" value="${esc(cropHost.borderColor || "#ffffff")}">
-                        </div>
-                    ` : ""}
                 </div>
-            ` : `<p class="muted" style="font-size:12px;">Crop & Border require SuperSource Box or USK DVE.</p>`}
-
-            ${!isSS ? `
-                <div style="padding-top:10px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:8px;">
-                    <span class="section-label">Keyer Mask</span>
-                    <label class="check-row"><input type="checkbox" id="cmpMaskEn" ${layer.maskEnabled ? "checked" : ""}> Enable Mask</label>
-                    ${layer.maskEnabled ? `
-                        <label class="check-row"><input type="checkbox" id="cmpMaskLink" ${layer.maskLinked ? "checked" : ""}> Link Opposite Edges</label>
-                        ${[["maskLeft", "Left"], ["maskRight", "Right"], ["maskTop", "Top"], ["maskBottom", "Bottom"]].map(([k, lbl]) => `
-                            <div class="field">
-                                <label>Mask ${lbl} <span class="mono" data-ro="${k}">${layer[k] || 0}</span></label>
-                                <input type="range" data-mask-edge="${k}" min="0" max="18000" value="${layer[k] || 0}">
-                            </div>
-                        `).join("")}
-                    ` : ""}
-                </div>
-            ` : ""}
-        `;
-    }
-
-    function wireCanvasDrag(container, liveWs) {
-        const frame = container.querySelector("#composeStageFrame");
-        if (!frame) return;
-        const ws = getEditWs(liveWs);
-
-        frame.addEventListener("pointerdown", (e) => {
-            const resizeHandle = e.target.closest("[data-resize-kind]");
-            const boxEl = e.target.closest("[data-drag-kind]");
-            if (!resizeHandle && !boxEl) return;
-
-            const kind = resizeHandle ? resizeHandle.dataset.resizeKind : boxEl.dataset.dragKind;
-            const idx = Number(resizeHandle ? resizeHandle.dataset.resizeIdx : boxEl.dataset.dragIdx);
-            const isResize = !!resizeHandle;
-
-            selectedTarget = { kind, index: idx };
-            const layer = getCurrentLayerObj(ws);
-            if (!layer) return;
-            const canMove = kind === "box" || layer.keyType === "dve" || layer.flyingKey;
-
-            if (!canMove) {
-                render(container);
-                return;
-            }
-
-            e.preventDefault();
-            const frameRect = frame.getBoundingClientRect();
-            const startClientX = e.clientX;
-            const startClientY = e.clientY;
-            const startX = Number(layer.x || 0);
-            const startY = Number(layer.y || 0);
-            const startSize = Number(layer.size || 0.5);
-            const group = kind === "box" ? "box" : "usk";
-
-            const onMove = (ev) => {
-                const dxPct = (ev.clientX - startClientX) / frameRect.width;
-                const dyPct = (ev.clientY - startClientY) / frameRect.height;
-
-                if (isResize) {
-                    let nextSize = Math.max(0.1, Math.min(1.0, startSize + dxPct));
-                    if (snapEnabled) nextSize = Number((Math.round(nextSize * 100) / 100).toFixed(2));
-                    if (isStageMode()) layer.size = nextSize;
-                    else SwitcherEngine.setLayerSize(liveWs, idx, nextSize, group);
-                } else {
-                    let nextX = Math.max(-16, Math.min(16, startX + dxPct * 32));
-                    let nextY = Math.max(-9, Math.min(9, startY - dyPct * 18));
-                    if (snapEnabled) {
-                        nextX = snap(nextX);
-                        nextY = snap(nextY);
-                    }
-                    if (isStageMode()) {
-                        layer.x = nextX;
-                        layer.y = nextY;
-                    } else {
-                        SwitcherEngine.setLayerPosition(liveWs, idx, nextX, nextY, group);
-                    }
-                }
-
-                // Smoothly reposition overlay box immediately without full DOM rebuild
-                const liveRect = atemToCanvas(layer);
-                const targetBox = frame.querySelector(`[data-drag-kind="${kind}"][data-drag-idx="${idx}"]`);
-                if (targetBox) {
-                    targetBox.style.left = `${liveRect.left}%`;
-                    targetBox.style.top = `${liveRect.top}%`;
-                    targetBox.style.width = `${liveRect.width}%`;
-                    targetBox.style.height = `${liveRect.height}%`;
-                }
-                syncLiveStageOverlays();
-                renderCanvas();
-            };
-
-            const onUp = () => {
-                window.removeEventListener("pointermove", onMove);
-                window.removeEventListener("pointerup", onUp);
-                render(container);
-            };
-
-            window.addEventListener("pointermove", onMove);
-            window.addEventListener("pointerup", onUp);
-        });
-    }
-
-    function render(container) {
-        const savedInspTop = container.querySelector(".inspector-body")?.scrollTop || 0;
-        const savedTrayLeft = container.querySelector(".ss-preset-tray")?.scrollLeft || 0;
-        const esc = AppUI.esc;
-        const wsList = getAvailableWorkspaces();
-        const liveWs = getActiveComposeWs();
-        const ws = getEditWs(liveWs);
-        const staging = isStageMode();
-        const profile = getProfile() || {};
-        const maxUsks = getUpstreamKeyersPerME(profile);
-        const draftObj = staging ? ensureDraftForWs(liveWs) : null;
-        const dsks = (staging && liveWs.type === "me" && draftObj?.dsks)
-            ? draftObj.dsks.slice(0, getAvailableDSKs().length)
-            : getAvailableDSKs();
-        const presets = ShowTemplates.getAllSSPresets();
-        const animCfg = typeof SwitcherEngine?.getSSAnimSettings === "function"
-            ? SwitcherEngine.getSSAnimSettings()
-            : { enabled: true, durationMs: 600, easing: "easeInOut", offBoxMode: "shrink" };
-
-        const layerPillsHtml = ws.type === "superSource"
-            ? `
-                ${(ws.data.boxes || []).map((b, i) => `
-                    <button class="layer-pill ${selectedTarget.kind === "box" && selectedTarget.index === i ? "active" : ""}" data-lkind="box" data-lidx="${i}">
-                        <span class="dot ${b.enabled ? "on" : ""}"></span>Box ${i + 1}
+                <div class="field-row">
+                    <button class="btn btn-xs ${previewSelected ? "btn-amber" : ""}" id="btnCmpPreviewSel" title="Locally preview the currently selected USK/DSK/Box on this canvas even while Off Air (does not affect live output)">
+                        👁 Preview Selected
                     </button>
-                `).join("")}
-                <button class="layer-pill ${selectedTarget.kind === "art" ? "active" : ""}" data-lkind="art" data-lidx="0">Art</button>
-            `
-            : `
-                <button class="layer-pill ${selectedTarget.kind === "bg" ? "active" : ""}" data-lkind="bg" data-lidx="0">BG</button>
-                ${(ws.data.usk || []).slice(0, maxUsks).map((u, i) => {
-                    const ntFlag = !!(ws.data?.nextTransition?.usk?.[i]);
-                    const dotClass = u.enabled ? "air" : (ntFlag ? "on" : "");
-                    return `
-                        <button class="layer-pill ${selectedTarget.kind === "usk" && selectedTarget.index === i ? "active" : ""}" data-lkind="usk" data-lidx="${i}">
-                            <span class="dot ${dotClass}"></span>USK ${i + 1}
-                        </button>
-                    `;
-                }).join("")}
-                ${ws.resourceId === 0 ? dsks.map(d => `
-                    <button class="layer-pill ${selectedTarget.kind === "dsk" && selectedTarget.index === d.id ? "active" : ""}" data-lkind="dsk" data-lidx="${d.id}">
-                        <span class="dot ${d.enabled ? "air" : (d.tie ? "on" : "")}"></span>DSK ${d.id + 1}
-                    </button>
-                `).join("") : ""}
-            `;
-
-        const showTabs = selectedTarget.kind === "box" || selectedTarget.kind === "usk" || selectedTarget.kind === "dsk";
-        const activeClips = typeof CanvasRenderer !== "undefined" && typeof CanvasRenderer.getActiveMediaPlayerClips === "function"
-            ? CanvasRenderer.getActiveMediaPlayerClips()
-            : [];
-        const freeDves = ((staging ? draftObj?.dves : state.resources?.dves) || []).filter(d => d.assignedTo === null).length;
-
-        container.innerHTML = `
-            <div class="compose-view">
-                <div class="subbar">
-                    <div class="field-row" style="gap:10px; flex-wrap:wrap;">
-                        <div class="seg">
-                            ${wsList.map(w => `
-                                <button class="seg-item ${w.id === liveWs.id ? "active" : ""}" data-cws="${w.id}">${esc(w.name)}</button>
-                            `).join("")}
-                        </div>
-                        <div class="seg" title="Live edits the ATEM immediately; Offline Stage lets you compose safely without affecting live ATEM until you push">
-                            <button class="seg-item ${!staging ? "active" : ""}" id="btnCmpModeLive" data-cmp-mode="live">Live</button>
-                            <button class="seg-item ${staging ? "active" : ""}" id="btnCmpModeStage" data-cmp-mode="stage">Offline Stage</button>
-                        </div>
-                        ${ws.type === "me" ? `
-                            <div class="seg" title="Switch stage background between Program (PGM) and Preview (PVW)">
-                                <button class="seg-item ${stageBusMode === "program" ? "active" : ""}" data-stage-bus="program">PGM</button>
-                                <button class="seg-item ${stageBusMode === "preview" ? "active" : ""}" data-stage-bus="preview">PVW</button>
-                            </div>
-                        ` : ""}
-                        ${activeClips.map(({ mpNum, item, isLive }) => `
-                            <div class="clip-transport-pill ${item.playing === true ? "playing" : ""}" title="${esc(item.name)} (${isLive ? "Live on air" : "Cued"})">
-                                <span class="mono" style="font-size:10px; font-weight:700;">🎬 MP${mpNum}</span>
-                                ${isLive ? `<span class="badge red" style="padding:1px 5px;">LIVE</span>` : ""}
-                                <button class="btn btn-xs ${item.playing === true ? "btn-pvw solid" : ""}" data-cmp-clip-toggle="${item.id}" title="${item.playing === true ? "Pause Clip" : "Play Clip"}">${item.playing === true ? "⏸" : "▶"}</button>
-                                <button class="btn btn-xs" data-cmp-clip-stop="${item.id}" title="Stop & rewind clip to 0:00">⏹</button>
-                            </div>
-                        `).join("")}
-                    </div>
-                    <div class="field-row">
-                        <button class="btn btn-xs ${previewSelected ? "btn-amber" : ""}" id="btnCmpPreviewSel" title="Locally preview the currently selected USK/DSK/Box on this canvas even while Off Air (does not affect live output)">
-                            👁 Preview Selected
-                        </button>
-                        <button class="btn btn-xs ${showGuides ? "btn-accent-soft" : ""}" id="btnCmpGuides">Guides</button>
-                        <button class="btn btn-xs ${showSafeArea ? "btn-accent-soft" : ""}" id="btnCmpSafe">Safe Area</button>
-                        <button class="btn btn-xs ${snapEnabled ? "btn-accent-soft" : ""}" id="btnCmpSnap">Snap</button>
-                        <button class="btn btn-xs" id="btnCmpPopout">⧉ Pop Out Bus</button>
-                    </div>
-                </div>
-
-                ${staging ? `
-                    <div class="field-row" id="cmpStageActionBar" style="padding:7px 14px; background:var(--amber-bg); border-bottom:1px solid var(--amber-border); justify-content:space-between; flex-wrap:wrap; gap:8px;">
-                        <div class="field-row" style="gap:8px;">
-                            <span class="badge amber">OFFLINE STAGE</span>
-                            <span style="font-size:12px;">Editing ${esc(liveWs.name)} locally — live output &amp; ATEM hardware untouched until pushed.</span>
-                        </div>
-                        <div class="field-row" style="gap:6px;">
-                            <button class="btn btn-xs" id="btnCmpSyncLive" title="Discard local draft and reload current Live ATEM state">↺ Sync from Live</button>
-                            <button class="btn btn-xs btn-pgm solid" id="btnCmpCommitCut" title="Push staged changes directly to Live &amp; ATEM">⚡ Cut to Live</button>
-                            ${liveWs.type === "superSource" ? `<button class="btn btn-xs btn-amber solid" id="btnCmpCommitAnim" title="Animate smoothly from Live SuperSource into this staged look">✨ Animate to Live</button>` : ""}
-                        </div>
-                    </div>
-                ` : ""}
-
-                <div class="compose-body">
-                    <div class="compose-stage-col">
-                        <div class="compose-canvas-stage">
-                            ${renderStageStatusHtml(ws)}
-                            <div class="stage-frame" id="composeStageFrame">
-                                <canvas id="composeCanvas" width="1920" height="1080"></canvas>
-                                ${showSafeArea ? `<div class="safe-guides"><div class="safe-action"></div><div class="safe-title"></div></div>` : ""}
-                                <div class="stage-overlay-layer ${showGuides ? "interactive" : ""}">
-                                    ${renderStageBoxesHtml(ws)}
-                                </div>
-                            </div>
-                        </div>
-
-                        ${ws.type === "superSource" ? `
-                            <div style="display:flex; flex-direction:column; gap:6px;">
-                                <div class="field-row" style="gap:6px; flex-wrap:wrap; padding:6px 10px; border-radius:8px; background:var(--bg-surface); border:1px solid var(--border); font-size:11px;">
-                                    <span class="section-label" style="margin:0;">Merge Animate</span>
-                                    <button class="btn btn-xs ${animCfg.enabled ? "btn-accent-soft" : ""}" id="btnCmpSSAnimToggle">${animCfg.enabled ? "✨ On Click: Animate" : "⚡ On Click: Cut"}</button>
-                                    <select id="selCmpSSAnimDur" style="width:auto; padding:2px 6px; font-size:11px;" title="Duration">
-                                        ${[250, 500, 600, 750, 1000, 1500, 2000].map(ms => `<option value="${ms}" ${animCfg.durationMs === ms ? "selected" : ""}>${ms >= 1000 ? `${ms / 1000}s` : `${ms}ms`}</option>`).join("")}
-                                    </select>
-                                    <select id="selCmpSSAnimEase" style="width:auto; padding:2px 6px; font-size:11px;" title="Easing">
-                                        <option value="easeInOut" ${animCfg.easing === "easeInOut" ? "selected" : ""}>Smooth In-Out</option>
-                                        <option value="easeOut" ${animCfg.easing === "easeOut" ? "selected" : ""}>Ease Out</option>
-                                        <option value="easeIn" ${animCfg.easing === "easeIn" ? "selected" : ""}>Ease In</option>
-                                        <option value="linear" ${animCfg.easing === "linear" ? "selected" : ""}>Linear</option>
-                                        <option value="overshoot" ${animCfg.easing === "overshoot" ? "selected" : ""}>Overshoot</option>
-                                    </select>
-                                    <select id="selCmpSSAnimOff" style="width:auto; padding:2px 6px; font-size:11px;" title="How Off-Air / Entering / Exiting boxes animate">
-                                        <option value="shrink" ${animCfg.offBoxMode === "shrink" ? "selected" : ""}>Off Boxes: Zoom (ATEM)</option>
-                                        <option value="slide" ${animCfg.offBoxMode === "slide" ? "selected" : ""}>Off Boxes: Slide (ATEM)</option>
-                                        <option value="crop" ${animCfg.offBoxMode === "crop" ? "selected" : ""}>Off Boxes: Crop Wipe (ATEM)</option>
-                                        <option value="fade" ${animCfg.offBoxMode === "fade" ? "selected" : ""}>Off Boxes: Fade (UI preview · Cut on ATEM)</option>
-                                        <option value="cut" ${animCfg.offBoxMode === "cut" ? "selected" : ""}>Off Boxes: Cut</option>
-                                    </select>
-                                </div>
-                                <div class="ss-preset-tray">
-                                    <span class="section-label" style="margin-right:4px;">Layouts</span>
-                                    ${presets.map(p => `
-                                        <div class="ss-preset-card" data-ss-preset="${esc(p.id)}" title="Apply ${esc(p.name)}">
-                                            ${ShowTemplates.renderPresetThumbSvg(p.boxes)}
-                                            <span>${esc(p.name)}</span>
-                                            ${!p.builtIn ? `<button class="ss-preset-del" data-del-preset="${esc(p.id)}" title="Delete custom preset">×</button>` : ""}
-                                        </div>
-                                    `).join("")}
-                                    <button class="btn btn-sm btn-accent-soft" id="btnSaveSSPreset" style="flex-shrink:0; height:58px;">+ Save Layout</button>
-                                </div>
-                            </div>
-                        ` : ""}
-                    </div>
-
-                    <aside class="compose-inspector">
-                        <div class="inspector-top">
-                            <div class="field-row" style="justify-content:space-between;">
-                                <span class="section-label">${esc(ws.name)} Layers</span>
-                                ${ws.type === "me" ? `<span class="badge">${freeDves} DVE free</span>` : ""}
-                            </div>
-                            <div class="layer-pill-grid">${layerPillsHtml}</div>
-                            ${showTabs ? `
-                                <div class="seg" style="width:100%;">
-                                    <button class="seg-item ${inspectorTab === "source" ? "active" : ""}" data-itab="source" style="flex:1;">Source &amp; Key</button>
-                                    ${selectedTarget.kind !== "dsk" ? `<button class="seg-item ${inspectorTab === "transform" ? "active" : ""}" data-itab="transform" style="flex:1;">Transform</button>` : ""}
-                                    <button class="seg-item ${inspectorTab === "style" ? "active" : ""}" data-itab="style" style="flex:1;">Crop &amp; Style</button>
-                                </div>
-                            ` : ""}
-                        </div>
-                        <div class="inspector-body">
-                            ${renderInspectorBodyHtml(ws)}
-                        </div>
-                    </aside>
+                    <button class="btn btn-xs ${showGuides ? "btn-accent-soft" : ""}" id="btnCmpGuides">Guides</button>
+                    <button class="btn btn-xs ${showSafeArea ? "btn-accent-soft" : ""}" id="btnCmpSafe">Safe Area</button>
+                    <button class="btn btn-xs ${snapEnabled ? "btn-accent-soft" : ""}" id="btnCmpSnap">Snap</button>
+                    <button class="btn btn-xs" id="btnCmpPopout">⧉ Pop Out Bus</button>
                 </div>
             </div>
-        `;
 
-        // Wire subbar & edit mode
-        container.querySelectorAll("[data-cws]").forEach(btn => {
-            btn.addEventListener("click", () => {
-                selectedWsId = Number(btn.dataset.cws);
-                const nextWs = getActiveComposeWs();
-                selectedTarget = nextWs.type === "superSource" ? { kind: "box", index: 0 } : { kind: "usk", index: 0 };
-                inspectorTab = "source";
-                render(container);
-            });
-        });
-        container.querySelectorAll("[data-cmp-mode]").forEach(btn => {
-            btn.addEventListener("click", () => {
-                const nextMode = btn.dataset.cmpMode;
-                if (nextMode === "stage") ensureDraftForWs(liveWs);
-                setComposeEditMode(nextMode);
-                render(container);
-            });
-        });
-        container.querySelector("#btnCmpSyncLive")?.addEventListener("click", () => {
-            delete stagedDrafts[liveWs.id];
-            ensureDraftForWs(liveWs);
-            AppUI.toast(`Synced ${liveWs.name} draft from Live`, "ok");
+            ${staging ? `
+                <div class="field-row" id="cmpStageActionBar" style="padding:7px 14px; background:var(--amber-bg); border-bottom:1px solid var(--amber-border); justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                    <div class="field-row" style="gap:8px;">
+                        <span class="badge amber">OFFLINE STAGE</span>
+                        <span style="font-size:12px;">Editing ${esc(liveWs.name)} locally — live output &amp; ATEM hardware untouched until pushed.</span>
+                    </div>
+                    <div class="field-row" style="gap:6px;">
+                        <button class="btn btn-xs" id="btnCmpSyncLive" title="Discard local draft and reload current Live ATEM state">↺ Sync from Live</button>
+                        <button class="btn btn-xs btn-pgm solid" id="btnCmpCommitCut" title="Push staged changes directly to Live &amp; ATEM">⚡ Cut to Live</button>
+                        ${liveWs.type === "superSource" ? `<button class="btn btn-xs btn-amber solid" id="btnCmpCommitAnim" title="Animate smoothly from Live SuperSource into this staged look">✨ Animate to Live</button>` : ""}
+                    </div>
+                </div>
+            ` : ""}
+
+            <div class="compose-body">
+                <div class="compose-stage-col">
+                    <div class="compose-canvas-stage">
+                        ${renderStageStatusHtml(ws, composeCtx)}
+                        <div class="stage-frame" id="composeStageFrame">
+                            <canvas id="composeCanvas" width="1920" height="1080"></canvas>
+                            ${showSafeArea ? `<div class="safe-guides"><div class="safe-action"></div><div class="safe-title"></div></div>` : ""}
+                            <div class="stage-overlay-layer ${showGuides ? "interactive" : ""}">
+                                ${renderStageBoxesHtml(ws, composeCtx)}
+                            </div>
+                        </div>
+                    </div>
+
+                    ${ws.type === "superSource" ? `
+                        <div style="display:flex; flex-direction:column; gap:6px;">
+                            <div class="field-row" style="gap:6px; flex-wrap:wrap; padding:6px 10px; border-radius:8px; background:var(--bg-surface); border:1px solid var(--border); font-size:11px;">
+                                <span class="section-label" style="margin:0;">Merge Animate</span>
+                                <button class="btn btn-xs ${animCfg.enabled ? "btn-accent-soft" : ""}" id="btnCmpSSAnimToggle">${animCfg.enabled ? "✨ On Click: Animate" : "⚡ On Click: Cut"}</button>
+                                <select id="selCmpSSAnimDur" style="width:auto; padding:2px 6px; font-size:11px;" title="Duration">
+                                    ${[250, 500, 600, 750, 1000, 1500, 2000].map(ms => `<option value="${ms}" ${animCfg.durationMs === ms ? "selected" : ""}>${ms >= 1000 ? `${ms / 1000}s` : `${ms}ms`}</option>`).join("")}
+                                </select>
+                                <select id="selCmpSSAnimEase" style="width:auto; padding:2px 6px; font-size:11px;" title="Easing">
+                                    <option value="easeInOut" ${animCfg.easing === "easeInOut" ? "selected" : ""}>Smooth In-Out</option>
+                                    <option value="easeOut" ${animCfg.easing === "easeOut" ? "selected" : ""}>Ease Out</option>
+                                    <option value="easeIn" ${animCfg.easing === "easeIn" ? "selected" : ""}>Ease In</option>
+                                    <option value="linear" ${animCfg.easing === "linear" ? "selected" : ""}>Linear</option>
+                                    <option value="overshoot" ${animCfg.easing === "overshoot" ? "selected" : ""}>Overshoot</option>
+                                </select>
+                                <select id="selCmpSSAnimOff" style="width:auto; padding:2px 6px; font-size:11px;" title="How Off-Air / Entering / Exiting boxes animate">
+                                    <option value="shrink" ${animCfg.offBoxMode === "shrink" ? "selected" : ""}>Off Boxes: Zoom (ATEM)</option>
+                                    <option value="slide" ${animCfg.offBoxMode === "slide" ? "selected" : ""}>Off Boxes: Slide (ATEM)</option>
+                                    <option value="crop" ${animCfg.offBoxMode === "crop" ? "selected" : ""}>Off Boxes: Crop Wipe (ATEM)</option>
+                                    <option value="fade" ${animCfg.offBoxMode === "fade" ? "selected" : ""}>Off Boxes: Fade (UI preview · Cut on ATEM)</option>
+                                    <option value="cut" ${animCfg.offBoxMode === "cut" ? "selected" : ""}>Off Boxes: Cut</option>
+                                </select>
+                            </div>
+                            <div class="ss-preset-tray">
+                                <span class="section-label" style="margin-right:4px;">Layouts</span>
+                                ${presets.map(p => `
+                                    <div class="ss-preset-card" data-ss-preset="${esc(p.id)}" title="Apply ${esc(p.name)}">
+                                        ${ShowTemplates.renderPresetThumbSvg(p.boxes)}
+                                        <span>${esc(p.name)}</span>
+                                        ${!p.builtIn ? `<button class="ss-preset-del" data-del-preset="${esc(p.id)}" title="Delete custom preset">×</button>` : ""}
+                                    </div>
+                                `).join("")}
+                                <button class="btn btn-sm btn-accent-soft" id="btnSaveSSPreset" style="flex-shrink:0; height:58px;">+ Save Layout</button>
+                            </div>
+                        </div>
+                    ` : ""}
+                </div>
+
+                <aside class="compose-inspector">
+                    <div class="inspector-top">
+                        <div class="field-row" style="justify-content:space-between;">
+                            <span class="section-label">${esc(ws.name)} Layers</span>
+                            ${ws.type === "me" ? `<span class="badge">${freeDves} DVE free</span>` : ""}
+                        </div>
+                        <div class="layer-pill-grid">${layerPillsHtml}</div>
+                        ${showTabs ? `
+                            <div class="seg" style="width:100%;">
+                                <button class="seg-item ${inspectorTab === "source" ? "active" : ""}" data-itab="source" style="flex:1;">Source &amp; Key</button>
+                                ${selectedTarget.kind !== "dsk" ? `<button class="seg-item ${inspectorTab === "transform" ? "active" : ""}" data-itab="transform" style="flex:1;">Transform</button>` : ""}
+                                <button class="seg-item ${inspectorTab === "style" ? "active" : ""}" data-itab="style" style="flex:1;">Crop &amp; Style</button>
+                            </div>
+                        ` : ""}
+                    </div>
+                    <div class="inspector-body">
+                        ${renderInspectorBodyHtml(ws, composeCtx)}
+                    </div>
+                </aside>
+            </div>
+        </div>
+    `;
+
+    // Wire subbar & edit mode
+    container.querySelectorAll("[data-cws]").forEach(btn => {
+        btn.addEventListener("click", () => {
+            selectedWsId = Number(btn.dataset.cws);
+            const nextWs = getActiveComposeWs();
+            selectedTarget = nextWs.type === "superSource" ? { kind: "box", index: 0 } : { kind: "usk", index: 0 };
+            inspectorTab = "source";
             render(container);
         });
-        container.querySelector("#btnCmpCommitCut")?.addEventListener("click", () => {
-            commitDraftToLive(liveWs, { animate: false });
+    });
+    container.querySelectorAll("[data-cmp-mode]").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const nextMode = btn.dataset.cmpMode;
+            if (nextMode === "stage") ensureDraftForWs(liveWs);
+            setComposeEditMode(nextMode);
             render(container);
         });
-        container.querySelector("#btnCmpCommitAnim")?.addEventListener("click", () => {
-            commitDraftToLive(liveWs, { animate: true });
-        });
+    });
+    container.querySelector("#btnCmpSyncLive")?.addEventListener("click", () => {
+        delete stagedDrafts[liveWs.id];
+        ensureDraftForWs(liveWs);
+        AppUI.toast(`Synced ${liveWs.name} draft from Live`, "ok");
+        render(container);
+    });
+    container.querySelector("#btnCmpCommitCut")?.addEventListener("click", () => {
+        commitDraftToLive(liveWs, { animate: false });
+        render(container);
+    });
+    container.querySelector("#btnCmpCommitAnim")?.addEventListener("click", () => {
+        commitDraftToLive(liveWs, { animate: true });
+    });
 
-        container.querySelectorAll("[data-stage-bus]").forEach(btn => {
-            btn.addEventListener("click", () => { stageBusMode = btn.dataset.stageBus; render(container); });
-        });
-        container.querySelector("#btnCmpPreviewSel")?.addEventListener("click", () => { previewSelected = !previewSelected; render(container); });
-        container.querySelector("#btnCmpGuides")?.addEventListener("click", () => { showGuides = !showGuides; render(container); });
-        container.querySelector("#btnCmpSafe")?.addEventListener("click", () => { showSafeArea = !showSafeArea; render(container); });
-        container.querySelector("#btnCmpSnap")?.addEventListener("click", () => { snapEnabled = !snapEnabled; render(container); });
-        container.querySelector("#btnCmpPopout")?.addEventListener("click", () => {
-            state.activeWorkspaceId = liveWs.id;
-            if (typeof PopoutManager !== "undefined") PopoutManager.openActiveBus();
-        });
-        container.querySelectorAll("[data-cmp-clip-toggle]").forEach(btn => {
-            btn.addEventListener("click", () => {
-                CanvasRenderer.controlMediaClip?.(Number(btn.dataset.cmpClipToggle), "toggle");
-                render(container);
-            });
-        });
-        container.querySelectorAll("[data-cmp-clip-stop]").forEach(btn => {
-            btn.addEventListener("click", () => {
-                CanvasRenderer.controlMediaClip?.(Number(btn.dataset.cmpClipStop), "stop");
-                render(container);
-            });
-        });
-
-        // SuperSource Animation Controls
-        container.querySelector("#btnCmpSSAnimToggle")?.addEventListener("click", () => {
-            const cur = SwitcherEngine.getSSAnimSettings?.() || { enabled: true };
-            SwitcherEngine.setSSAnimSettings?.({ enabled: !cur.enabled });
+    container.querySelectorAll("[data-stage-bus]").forEach(btn => {
+        btn.addEventListener("click", () => { stageBusMode = btn.dataset.stageBus; render(container); });
+    });
+    container.querySelector("#btnCmpPreviewSel")?.addEventListener("click", () => { previewSelected = !previewSelected; render(container); });
+    container.querySelector("#btnCmpGuides")?.addEventListener("click", () => { showGuides = !showGuides; render(container); });
+    container.querySelector("#btnCmpSafe")?.addEventListener("click", () => { showSafeArea = !showSafeArea; render(container); });
+    container.querySelector("#btnCmpSnap")?.addEventListener("click", () => { snapEnabled = !snapEnabled; render(container); });
+    container.querySelector("#btnCmpPopout")?.addEventListener("click", () => {
+        state.activeWorkspaceId = liveWs.id;
+        if (typeof PopoutManager !== "undefined") PopoutManager.openActiveBus();
+    });
+    container.querySelectorAll("[data-cmp-clip-toggle]").forEach(btn => {
+        btn.addEventListener("click", () => {
+            CanvasRenderer.controlMediaClip?.(Number(btn.dataset.cmpClipToggle), "toggle");
             render(container);
         });
-        container.querySelector("#selCmpSSAnimDur")?.addEventListener("change", (e) => {
-            SwitcherEngine.setSSAnimSettings?.({ durationMs: Number(e.target.value) || 600 });
-        });
-        container.querySelector("#selCmpSSAnimEase")?.addEventListener("change", (e) => {
-            SwitcherEngine.setSSAnimSettings?.({ easing: e.target.value });
-        });
-        container.querySelector("#selCmpSSAnimOff")?.addEventListener("change", (e) => {
-            SwitcherEngine.setSSAnimSettings?.({ offBoxMode: e.target.value });
-        });
-
-        // Wire SS visual presets & save custom layout
-        container.querySelectorAll("[data-del-preset]").forEach(btn => {
-            btn.addEventListener("click", (e) => {
-                e.stopPropagation();
-                ShowTemplates.deleteCustomSSPreset(btn.dataset.delPreset);
-                render(container);
-            });
-        });
-        container.querySelectorAll("[data-ss-preset]").forEach(card => {
-            card.addEventListener("click", () => {
-                const preset = ShowTemplates.getAllSSPresets().find(p => p.id === card.dataset.ssPreset);
-                if (!preset) return;
-                if (staging) {
-                    preset.boxes.forEach((cfg, idx) => {
-                        const b = ws.data.boxes?.[idx];
-                        if (!b) return;
-                        b.enabled = !!cfg.enabled;
-                        b.x = Number(cfg.x ?? 0);
-                        b.y = Number(cfg.y ?? 0);
-                        b.size = Number(cfg.size ?? 0.5);
-                        b.cropEnabled = !!cfg.cropEnabled;
-                        b.cropTop = Number(cfg.cropTop ?? 0);
-                        b.cropBottom = Number(cfg.cropBottom ?? 0);
-                        b.cropLeft = Number(cfg.cropLeft ?? 0);
-                        b.cropRight = Number(cfg.cropRight ?? 0);
-                    });
-                    AppUI.toast(`Staged "${preset.name}" offline`, "ok");
-                    render(container);
-                } else {
-                    const useAnim = !!SwitcherEngine.getSSAnimSettings?.()?.enabled;
-                    ShowTemplates.applySSPreset(liveWs, preset, { animate: useAnim });
-                    AppUI.toast(`${useAnim ? "Animating" : "Applied"} "${preset.name}"`, "ok");
-                }
-            });
-        });
-        container.querySelector("#btnSaveSSPreset")?.addEventListener("click", () => {
-            const name = prompt("Name for this custom SuperSource layout:", `Custom ${(state.customSSPresets?.length || 0) + 1}`);
-            if (!name || !name.trim()) return;
-            ShowTemplates.saveCustomSSPreset(ws, name.trim());
-            AppUI.toast(`Saved preset "${name.trim()}"`, "ok");
+    });
+    container.querySelectorAll("[data-cmp-clip-stop]").forEach(btn => {
+        btn.addEventListener("click", () => {
+            CanvasRenderer.controlMediaClip?.(Number(btn.dataset.cmpClipStop), "stop");
             render(container);
         });
+    });
 
-        // Wire Layer Pills & Inspector Tabs
-        container.querySelectorAll("[data-lkind]").forEach(btn => {
-            btn.addEventListener("click", () => {
-                selectedTarget = { kind: btn.dataset.lkind, index: Number(btn.dataset.lidx) };
-                if (selectedTarget.kind === "dsk" && inspectorTab === "transform") inspectorTab = "source";
-                render(container);
-            });
+    // SuperSource Animation Controls
+    container.querySelector("#btnCmpSSAnimToggle")?.addEventListener("click", () => {
+        const cur = SwitcherEngine.getSSAnimSettings?.() || { enabled: true };
+        SwitcherEngine.setSSAnimSettings?.({ enabled: !cur.enabled });
+        render(container);
+    });
+    container.querySelector("#selCmpSSAnimDur")?.addEventListener("change", (e) => {
+        SwitcherEngine.setSSAnimSettings?.({ durationMs: Number(e.target.value) || 600 });
+    });
+    container.querySelector("#selCmpSSAnimEase")?.addEventListener("change", (e) => {
+        SwitcherEngine.setSSAnimSettings?.({ easing: e.target.value });
+    });
+    container.querySelector("#selCmpSSAnimOff")?.addEventListener("change", (e) => {
+        SwitcherEngine.setSSAnimSettings?.({ offBoxMode: e.target.value });
+    });
+
+    // Wire SS visual presets & save custom layout
+    container.querySelectorAll("[data-del-preset]").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            ShowTemplates.deleteCustomSSPreset(btn.dataset.delPreset);
+            render(container);
         });
-        container.querySelectorAll("[data-itab]").forEach(btn => {
-            btn.addEventListener("click", () => {
-                inspectorTab = btn.dataset.itab;
-                render(container);
-            });
-        });
-
-        // Wire Inspector Controls & Canvas Drag
-        wireInspectorControls(container, liveWs);
-        wireCanvasDrag(container, liveWs);
-        renderCanvas();
-        const insp = container.querySelector(".inspector-body");
-        if (insp && savedInspTop > 0) insp.scrollTop = savedInspTop;
-        const tray = container.querySelector(".ss-preset-tray");
-        if (tray && savedTrayLeft > 0) tray.scrollLeft = savedTrayLeft;
-    }
-
-    function commitDraftToLive(liveWs, { animate = false } = {}) {
-        const draft = stagedDrafts[liveWs?.id];
-        if (!liveWs || !draft) return;
-
-        if (liveWs.type === "superSource") {
-            SwitcherEngine.commitSuperSourceState(liveWs, draft.data, { animate });
-            AppUI.toast(`${animate ? "Animating" : "Cut"} staged ${liveWs.name} to Live`, "ok");
-            return;
-        }
-
-        // Commit M/E USKs and DSKs cleanly through SwitcherEngine
-        if (Array.isArray(draft.data?.usk)) {
-            draft.data.usk.forEach((u, idx) => {
-                if (!liveWs.data.usk?.[idx]) return;
-                SwitcherEngine.setLayerSource(liveWs, idx, u.source || "", "usk");
-                SwitcherEngine.setLayerEnabled(liveWs, idx, !!u.enabled, "usk", true);
-                SwitcherEngine.setLayerPosition(liveWs, idx, u.x ?? 0, u.y ?? 0, "usk");
-                SwitcherEngine.setLayerSize(liveWs, idx, u.size ?? 0.5, "usk");
-                const draftDve = u.dveId !== null ? draft.dves?.find(d => d.id === u.dveId) : null;
-                if (draftDve) {
-                    SwitcherEngine.setLayerCropEnabled(liveWs, idx, !!draftDve.cropEnabled, "usk");
-                    ["left", "right", "top", "bottom"].forEach(edge => {
-                        const key = `crop${edge[0].toUpperCase()}${edge.slice(1)}`;
-                        SwitcherEngine.setLayerCropEdge(liveWs, idx, edge, draftDve[key] || 0, "usk");
-                    });
-                }
-            });
-        }
-        if (liveWs.resourceId === 0 && Array.isArray(draft.dsks)) {
-            draft.dsks.forEach((d, idx) => {
-                SwitcherEngine.setDSKFill(idx, d.source || "");
-                SwitcherEngine.setDSKKey(idx, d.keySource || "");
-                SwitcherEngine.setDSKEnabled(idx, !!d.enabled);
-                SwitcherEngine.setDSKTie(idx, !!d.tie);
-                SwitcherEngine.setDSKRate(idx, d.rate || 25);
-            });
-        }
-        AppUI.toast(`Cut staged ${liveWs.name} to Live`, "ok");
-    }
-
-    function wireInspectorControls(container, liveWs) {
-        const ws = getEditWs(liveWs);
-        const staging = isStageMode();
-        const isSS = ws.type === "superSource";
-        const group = isSS ? "box" : "usk";
-        const idx = selectedTarget.index;
-        const redrawStage = () => { syncLiveStageOverlays(); renderCanvas(); };
-
-        // Art controls
-        if (isSS && selectedTarget.kind === "art") {
-            const setArt = (patch, full = true) => {
-                if (staging) {
-                    Object.assign(ws.data, patch);
-                    if (full) render(container); else redrawStage();
-                } else {
-                    SwitcherEngine.setSuperSourceArt(liveWs, patch);
-                }
-            };
-            container.querySelector("#cmpArtSrc")?.addEventListener("change", (e) => setArt({ artSource: e.target.value }));
-            container.querySelector("#cmpArtPlace")?.addEventListener("change", (e) => setArt({ artPlace: e.target.value }));
-            container.querySelector("#cmpArtKey")?.addEventListener("change", (e) => setArt({ artKeySource: e.target.value }));
-            container.querySelector("#cmpArtPre")?.addEventListener("change", (e) => setArt({ artPremultiplied: e.target.checked }));
-            container.querySelector("#cmpArtInv")?.addEventListener("change", (e) => setArt({ artInvert: e.target.checked }));
-            container.querySelector("#cmpArtClip")?.addEventListener("input", (e) => setArt({ artClip: Number(e.target.value) }, false));
-            container.querySelector("#cmpArtGain")?.addEventListener("input", (e) => setArt({ artGain: Number(e.target.value) }, false));
-            return;
-        }
-
-        // ME BG
-        if (!isSS && selectedTarget.kind === "bg") {
-            container.querySelector("#cmpMePgm")?.addEventListener("change", (e) => {
-                if (staging) { ws.data.source = e.target.value; render(container); }
-                else SwitcherEngine.setMEProgram(liveWs, e.target.value);
-            });
-            container.querySelector("#cmpMePvw")?.addEventListener("change", (e) => {
-                if (staging) { ws.data.previewSource = e.target.value; render(container); }
-                else SwitcherEngine.setMEPreview(liveWs, e.target.value);
-            });
-            container.querySelector("#cmpMeCut")?.addEventListener("click", () => {
-                if (staging) {
-                    const tmp = ws.data.source; ws.data.source = ws.data.previewSource; ws.data.previewSource = tmp;
-                    render(container);
-                } else {
-                    SwitcherEngine.performTransitionCut(liveWs, { record: true, emit: true });
-                }
-            });
-            container.querySelector("#cmpMeAuto")?.addEventListener("click", () => {
-                if (!staging) SwitcherEngine.performTransitionAuto(liveWs);
-            });
-            return;
-        }
-
-        // DSK
-        if (selectedTarget.kind === "dsk") {
-            const dsk = getEditDSK(liveWs, idx);
-            if (!dsk) return;
-            const applyEdge = (edge, val) => {
-                const map = { left: ["maskLeft", "maskRight"], right: ["maskRight", "maskLeft"], top: ["maskTop", "maskBottom"], bottom: ["maskBottom", "maskTop"] };
-                const p = map[edge];
-                if (!p) return;
-                dsk[p[0]] = val;
-                if (dsk.maskLinked) dsk[p[1]] = val;
-            };
-            container.querySelector("#cmpDskAir")?.addEventListener("click", () => {
-                if (staging) { dsk.enabled = !dsk.enabled; render(container); }
-                else SwitcherEngine.setDSKEnabled(idx, !dsk.enabled);
-            });
-            container.querySelector("#cmpDskAuto")?.addEventListener("click", () => {
-                if (staging) { dsk.enabled = !dsk.enabled; render(container); }
-                else SwitcherEngine.performDSKAuto(idx);
-            });
-            container.querySelector("#cmpDskTie")?.addEventListener("click", () => {
-                if (staging) { dsk.tie = !dsk.tie; render(container); }
-                else SwitcherEngine.setDSKTie(idx, !dsk.tie);
-            });
-            container.querySelector("#cmpDskFill")?.addEventListener("change", (e) => {
-                if (staging) { dsk.source = e.target.value; render(container); }
-                else SwitcherEngine.setDSKFill(idx, e.target.value);
-            });
-            container.querySelector("#cmpDskKey")?.addEventListener("change", (e) => {
-                if (staging) { dsk.keySource = e.target.value; render(container); }
-                else SwitcherEngine.setDSKKey(idx, e.target.value);
-            });
-            container.querySelector("#cmpDskRate")?.addEventListener("change", (e) => {
-                const r = Math.max(1, Math.min(250, Number(e.target.value) || 25));
-                if (staging) { dsk.rate = r; render(container); }
-                else SwitcherEngine.setDSKRate(idx, r);
-            });
-            container.querySelector("#cmpDskPre")?.addEventListener("change", (e) => {
-                if (staging) { dsk.keySettings.linear.premultiplied = e.target.checked; render(container); }
-                else SwitcherEngine.setDSKPremultiplied(idx, e.target.checked);
-            });
-            container.querySelector("#cmpDskInv")?.addEventListener("change", (e) => {
-                if (staging) { dsk.keySettings.linear.invert = e.target.checked; dsk.keySettings.luma.invert = e.target.checked; render(container); }
-                else SwitcherEngine.setDSKInvert(idx, e.target.checked);
-            });
-            container.querySelector("#cmpDskClip")?.addEventListener("input", (e) => {
-                if (staging) { const v = Number(e.target.value); dsk.keySettings.linear.clip = v; dsk.keySettings.luma.clip = v; redrawStage(); }
-                else SwitcherEngine.setDSKClip(idx, Number(e.target.value));
-            });
-            container.querySelector("#cmpDskGain")?.addEventListener("input", (e) => {
-                if (staging) { const v = Number(e.target.value); dsk.keySettings.linear.gain = v; dsk.keySettings.luma.gain = v; redrawStage(); }
-                else SwitcherEngine.setDSKGain(idx, Number(e.target.value));
-            });
-            container.querySelector("#cmpDskMaskEn")?.addEventListener("change", (e) => {
-                if (staging) { dsk.maskEnabled = e.target.checked; render(container); }
-                else SwitcherEngine.setDSKMaskEnabled(idx, e.target.checked);
-            });
-            container.querySelector("#cmpDskMaskLink")?.addEventListener("change", (e) => { dsk.maskLinked = e.target.checked; });
-            container.querySelectorAll("[data-dsk-mask]").forEach(rng => {
-                rng.addEventListener("input", (e) => {
-                    const edge = rng.dataset.dskMask.replace("mask", "").toLowerCase();
-                    if (staging) { applyEdge(edge, Number(e.target.value)); redrawStage(); }
-                    else SwitcherEngine.setDSKMaskEdge(idx, edge, Number(e.target.value));
-                });
-            });
-            return;
-        }
-
-        // Box / USK
-        const layer = getCurrentLayerObj(ws);
-        if (!layer) return;
-        const cropHost = getEditCropHost(liveWs, layer, isSS);
-
-        container.querySelector("#cmpLayerEnabled")?.addEventListener("change", (e) => {
-            if (staging) { layer.enabled = e.target.checked; render(container); }
-            else SwitcherEngine.setLayerEnabled(liveWs, idx, e.target.checked, group);
-        });
-        container.querySelector("#cmpUskOnAirBtn")?.addEventListener("click", () => {
-            if (staging) { layer.enabled = !layer.enabled; render(container); }
-            else SwitcherEngine.setLayerEnabled(liveWs, idx, !layer.enabled, "usk", true);
-        });
-        container.querySelector("#cmpUskStageBtn")?.addEventListener("click", () => {
+    });
+    container.querySelectorAll("[data-ss-preset]").forEach(card => {
+        card.addEventListener("click", () => {
+            const preset = ShowTemplates.getAllSSPresets().find(p => p.id === card.dataset.ssPreset);
+            if (!preset) return;
             if (staging) {
-                ws.data.nextTransition ??= { bkgd: true, usk: [false, false, false, false] };
-                ws.data.nextTransition.usk[idx] = !ws.data.nextTransition.usk[idx];
+                preset.boxes.forEach((cfg, idx) => {
+                    const b = ws.data.boxes?.[idx];
+                    if (!b) return;
+                    b.enabled = !!cfg.enabled;
+                    b.x = Number(cfg.x ?? 0);
+                    b.y = Number(cfg.y ?? 0);
+                    b.size = Number(cfg.size ?? 0.5);
+                    b.cropEnabled = !!cfg.cropEnabled;
+                    b.cropTop = Number(cfg.cropTop ?? 0);
+                    b.cropBottom = Number(cfg.cropBottom ?? 0);
+                    b.cropLeft = Number(cfg.cropLeft ?? 0);
+                    b.cropRight = Number(cfg.cropRight ?? 0);
+                });
+                AppUI.toast(`Staged "${preset.name}" offline`, "ok");
                 render(container);
             } else {
-                SwitcherEngine.toggleNextTransitionKey(liveWs, idx);
+                const useAnim = !!SwitcherEngine.getSSAnimSettings?.()?.enabled;
+                ShowTemplates.applySSPreset(liveWs, preset, { animate: useAnim });
+                AppUI.toast(`${useAnim ? "Animating" : "Applied"} "${preset.name}"`, "ok");
             }
         });
-        container.querySelector("#cmpLayerSource")?.addEventListener("change", (e) => {
-            if (staging) { layer.source = e.target.value; render(container); }
-            else SwitcherEngine.setLayerSource(liveWs, idx, e.target.value, group);
-        });
-        container.querySelector("#cmpKeyType")?.addEventListener("change", (e) => {
-            if (staging) { layer.keyType = e.target.value; render(container); }
-            else if (!SwitcherEngine.changeLayerKeyType(liveWs, idx, e.target.value)) {
-                AppUI.toast("No free DVE channels available on this ATEM model.", "err");
-            }
-        });
-        container.querySelector("#cmpFlyingKey")?.addEventListener("change", (e) => {
-            if (staging) { layer.flyingKey = e.target.checked; render(container); }
-            else if (!SwitcherEngine.changeLayerFlyingKey(liveWs, idx, e.target.checked)) {
-                AppUI.toast("No free DVE channels available.", "err");
-            }
-        });
-        container.querySelector("#cmpQuickEnableDve")?.addEventListener("click", () => {
-            if (staging) { layer.keyType = "dve"; render(container); }
-            else if (!SwitcherEngine.changeLayerKeyType(liveWs, idx, "dve")) {
-                AppUI.toast("No free DVE channels available on this ATEM model.", "err");
-            }
-        });
-        container.querySelector("#cmpQuickEnableFly")?.addEventListener("click", () => {
-            if (staging) { layer.flyingKey = true; render(container); }
-            else if (!SwitcherEngine.changeLayerFlyingKey(liveWs, idx, true)) {
-                AppUI.toast("No free DVE channels available.", "err");
-            }
-        });
-        container.querySelector("#cmpLumaClip")?.addEventListener("input", (e) => {
-            if (staging) { layer.keySettings.luma.clip = Number(e.target.value); redrawStage(); }
-            else SwitcherEngine.setLumaSetting(liveWs, idx, "clip", Number(e.target.value));
-        });
-        container.querySelector("#cmpLumaGain")?.addEventListener("input", (e) => {
-            if (staging) { layer.keySettings.luma.gain = Number(e.target.value); redrawStage(); }
-            else SwitcherEngine.setLumaSetting(liveWs, idx, "gain", Number(e.target.value));
-        });
-        container.querySelector("#cmpLumaInv")?.addEventListener("change", (e) => {
-            if (staging) { layer.keySettings.luma.invert = e.target.checked; render(container); }
-            else SwitcherEngine.setLumaSetting(liveWs, idx, "invert", e.target.checked);
-        });
-        container.querySelector("#cmpKeySrc")?.addEventListener("change", (e) => {
-            if (staging) { layer.keySettings.linear.keySource = e.target.value; render(container); }
-            else SwitcherEngine.setLinearSetting(liveWs, idx, "keySource", e.target.value);
-        });
-        container.querySelector("#cmpLinPre")?.addEventListener("change", (e) => {
-            if (staging) { layer.keySettings.linear.premultiplied = e.target.checked; render(container); }
-            else SwitcherEngine.setLinearSetting(liveWs, idx, "premultiplied", e.target.checked);
-        });
-        container.querySelector("#cmpLinClip")?.addEventListener("input", (e) => {
-            if (staging) { layer.keySettings.linear.clip = Number(e.target.value); redrawStage(); }
-            else SwitcherEngine.setLinearSetting(liveWs, idx, "clip", Number(e.target.value));
-        });
-        container.querySelector("#cmpLinGain")?.addEventListener("input", (e) => {
-            if (staging) { layer.keySettings.linear.gain = Number(e.target.value); redrawStage(); }
-            else SwitcherEngine.setLinearSetting(liveWs, idx, "gain", Number(e.target.value));
-        });
-        container.querySelector("#cmpChromaCol")?.addEventListener("input", (e) => {
-            if (staging) { layer.keySettings.chroma.sampleColor = e.target.value; redrawStage(); }
-            else SwitcherEngine.setChromaSetting(liveWs, idx, "sampleColor", e.target.value);
-        });
-        container.querySelector("#cmpChromaSpill")?.addEventListener("input", (e) => {
-            if (staging) { layer.keySettings.chroma.spill = Number(e.target.value); redrawStage(); }
-            else SwitcherEngine.setChromaSetting(liveWs, idx, "spill", Number(e.target.value));
-        });
-        container.querySelector("#cmpChromaCorr")?.addEventListener("input", (e) => {
-            if (staging) { layer.keySettings.chroma.correction = Number(e.target.value); redrawStage(); }
-            else SwitcherEngine.setChromaSetting(liveWs, idx, "correction", Number(e.target.value));
-        });
-        container.querySelector("#cmpPatType")?.addEventListener("change", (e) => {
-            if (staging) { layer.keySettings.pattern.pattern = e.target.value; render(container); }
-            else SwitcherEngine.setPatternSetting(liveWs, idx, "pattern", e.target.value);
-        });
-        container.querySelector("#cmpPatSize")?.addEventListener("input", (e) => {
-            if (staging) { layer.keySettings.pattern.size = Number(e.target.value); redrawStage(); }
-            else SwitcherEngine.setPatternSetting(liveWs, idx, "size", Number(e.target.value));
-        });
-        container.querySelector("#cmpPatSoft")?.addEventListener("input", (e) => {
-            if (staging) { layer.keySettings.pattern.softness = Number(e.target.value); redrawStage(); }
-            else SwitcherEngine.setPatternSetting(liveWs, idx, "softness", Number(e.target.value));
-        });
+    });
+    container.querySelector("#btnSaveSSPreset")?.addEventListener("click", () => {
+        const name = prompt("Name for this custom SuperSource layout:", `Custom ${(state.customSSPresets?.length || 0) + 1}`);
+        if (!name || !name.trim()) return;
+        ShowTemplates.saveCustomSSPreset(ws, name.trim());
+        AppUI.toast(`Saved preset "${name.trim()}"`, "ok");
+        render(container);
+    });
 
-        // Transform & Fly Keyframes
-        container.querySelector("#cmpPosX")?.addEventListener("input", (e) => {
-            if (staging) { layer.x = Number(e.target.value); redrawStage(); }
-            else SwitcherEngine.setLayerPosition(liveWs, idx, Number(e.target.value), layer.y, group);
+    // Wire Layer Pills & Inspector Tabs
+    container.querySelectorAll("[data-lkind]").forEach(btn => {
+        btn.addEventListener("click", () => {
+            selectedTarget = { kind: btn.dataset.lkind, index: Number(btn.dataset.lidx) };
+            if (selectedTarget.kind === "dsk" && inspectorTab === "transform") inspectorTab = "source";
+            render(container);
         });
-        container.querySelector("#cmpPosY")?.addEventListener("input", (e) => {
-            if (staging) { layer.y = Number(e.target.value); redrawStage(); }
-            else SwitcherEngine.setLayerPosition(liveWs, idx, layer.x, Number(e.target.value), group);
+    });
+    container.querySelectorAll("[data-itab]").forEach(btn => {
+        btn.addEventListener("click", () => {
+            inspectorTab = btn.dataset.itab;
+            render(container);
         });
-        container.querySelector("#cmpScale")?.addEventListener("input", (e) => {
-            if (staging) { layer.size = Number(e.target.value); redrawStage(); }
-            else SwitcherEngine.setLayerSize(liveWs, idx, Number(e.target.value), group);
-        });
-        container.querySelector("#cmpResetTransform")?.addEventListener("click", () => {
-            if (staging) { layer.x = 0; layer.y = 0; layer.size = 1; render(container); }
-            else {
-                SwitcherEngine.setLayerPosition(liveWs, idx, 0, 0, group);
-                SwitcherEngine.setLayerSize(liveWs, idx, 1, group);
-            }
-        });
-        container.querySelector("#cmpFlyRate")?.addEventListener("change", (e) => SwitcherEngine.setUSKFlyRate(liveWs, idx, Number(e.target.value) || 25));
-        container.querySelector("#cmpSetA")?.addEventListener("click", () => { SwitcherEngine.setUSKKeyframe(liveWs, idx, "A"); AppUI.toast("Stored Keyframe A", "ok"); });
-        container.querySelector("#cmpSetB")?.addEventListener("click", () => { SwitcherEngine.setUSKKeyframe(liveWs, idx, "B"); AppUI.toast("Stored Keyframe B", "ok"); });
-        container.querySelector("#cmpRunA")?.addEventListener("click", () => SwitcherEngine.runUSKKeyframe(liveWs, idx, "A"));
-        container.querySelector("#cmpRunB")?.addEventListener("click", () => SwitcherEngine.runUSKKeyframe(liveWs, idx, "B"));
-        container.querySelector("#cmpRunFull")?.addEventListener("click", () => SwitcherEngine.runUSKKeyframe(liveWs, idx, "Full"));
+    });
 
-        // Crop, Mask, Border
-        container.querySelector("#cmpCropEn")?.addEventListener("change", (e) => {
-            if (staging && cropHost) { cropHost.cropEnabled = e.target.checked; render(container); }
-            else SwitcherEngine.setLayerCropEnabled(liveWs, idx, e.target.checked, group);
-        });
-        container.querySelector("#cmpCropLink")?.addEventListener("change", (e) => {
-            if (cropHost) cropHost.cropLinked = e.target.checked;
-        });
-        container.querySelectorAll("[data-crop-edge]").forEach(rng => {
-            rng.addEventListener("input", (e) => {
-                const edge = rng.dataset.cropEdge.replace("crop", "").toLowerCase();
-                if (staging && cropHost) {
-                    const pairs = { left: ["cropLeft", "cropRight"], right: ["cropRight", "cropLeft"], top: ["cropTop", "cropBottom"], bottom: ["cropBottom", "cropTop"] };
-                    const p = pairs[edge];
-                    if (p) {
-                        const v = Number(e.target.value) || 0;
-                        cropHost[p[0]] = v;
-                        if (cropHost.cropLinked) cropHost[p[1]] = v;
-                    }
-                    redrawStage();
-                } else {
-                    SwitcherEngine.setLayerCropEdge(liveWs, idx, edge, Number(e.target.value), group);
-                }
-            });
-        });
-        container.querySelector("#cmpBorderEn")?.addEventListener("change", (e) => {
-            if (staging && cropHost) { cropHost.borderEnabled = e.target.checked; render(container); }
-            else SwitcherEngine.setLayerBorderEnabled(liveWs, idx, e.target.checked, group);
-        });
-        container.querySelector("#cmpBorderW")?.addEventListener("input", (e) => {
-            if (staging && cropHost) { cropHost.borderWidth = Math.max(1, Math.min(20, Number(e.target.value) || 2)); redrawStage(); }
-            else SwitcherEngine.setLayerBorderWidth(liveWs, idx, Number(e.target.value), group);
-        });
-        container.querySelector("#cmpBorderCol")?.addEventListener("input", (e) => {
-            if (staging && cropHost) { cropHost.borderColor = String(e.target.value || "#ffffff"); redrawStage(); }
-            else SwitcherEngine.setLayerBorderColor(liveWs, idx, e.target.value, group);
-        });
-        container.querySelector("#cmpMaskEn")?.addEventListener("change", (e) => {
-            if (staging) { layer.maskEnabled = e.target.checked; render(container); }
-            else SwitcherEngine.setLayerMaskEnabled(liveWs, idx, e.target.checked, group);
-        });
-        container.querySelector("#cmpMaskLink")?.addEventListener("change", (e) => { layer.maskLinked = e.target.checked; });
-        container.querySelectorAll("[data-mask-edge]").forEach(rng => {
-            rng.addEventListener("input", (e) => {
-                const edge = rng.dataset.maskEdge.replace("mask", "").toLowerCase();
-                if (staging) {
-                    const pairs = { left: ["maskLeft", "maskRight"], right: ["maskRight", "maskLeft"], top: ["maskTop", "maskBottom"], bottom: ["maskBottom", "maskTop"] };
-                    const p = pairs[edge];
-                    if (p) {
-                        const v = Number(e.target.value) || 0;
-                        layer[p[0]] = v;
-                        if (layer.maskLinked) layer[p[1]] = v;
-                    }
-                    redrawStage();
-                } else {
-                    SwitcherEngine.setLayerMaskEdge(liveWs, idx, edge, Number(e.target.value));
-                }
-            });
-        });
-    }
+    // Wire Inspector Controls & Canvas Drag
+    wireInspectorControls(container, liveWs, composeCtx);
+    wireCanvasDrag(container, liveWs, composeCtx);
+    renderCanvas();
+    const insp = container.querySelector(".inspector-body");
+    if (insp && savedInspTop > 0) insp.scrollTop = savedInspTop;
+    const tray = container.querySelector(".ss-preset-tray");
+    if (tray && savedTrayLeft > 0) tray.scrollLeft = savedTrayLeft;
+}
 
-    return { render, renderCanvas, syncLiveStageOverlays, focusDSK, resetSelection, getEditMode: () => composeEditMode, setEditMode: setComposeEditMode };
-})();
+const ViewCompose = {
+    render,
+    renderCanvas,
+    syncLiveStageOverlays,
+    focusDSK,
+    resetSelection,
+    getEditMode: () => composeEditMode,
+    setEditMode: setComposeEditMode
+};
+
+window.ViewCompose = ViewCompose;
+export { ViewCompose };
+export default ViewCompose;
